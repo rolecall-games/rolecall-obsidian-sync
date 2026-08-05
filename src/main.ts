@@ -1,99 +1,113 @@
-import {App, Editor, MarkdownView, Modal, Notice, Plugin} from 'obsidian';
-import {DEFAULT_SETTINGS, MyPluginSettings, SampleSettingTab} from "./settings";
+import { Notice, Plugin } from "obsidian";
+import { DEFAULT_SETTINGS, RoleCallSettingTab, RoleCallSyncSettings } from "./settings";
+import { SyncEngine, SyncState } from "./sync";
+import { targetFingerprint } from "./util";
 
-// Remember to rename these classes and interfaces!
+/**
+ * Plugin lifecycle only: register the command and ribbon, load/save settings,
+ * and own the persisted sync state. The push itself lives in `SyncEngine`.
+ */
+export default class RoleCallSyncPlugin extends Plugin {
+	settings: RoleCallSyncSettings = DEFAULT_SETTINGS;
 
-export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
+	// Root-relative published path -> content hash, from the last successful
+	// sync. Lets us send only what changed and emit explicit deletes.
+	private lastSyncedHashes: SyncState = {};
+
+	// Which server/game/folder `lastSyncedHashes` was built against. See
+	// `targetFingerprint`; a mismatch invalidates the whole state.
+	private syncedTarget: string | null = null;
+
+	// One push at a time. Both the command and the ribbon call pushPublished,
+	// and two overlapping runs each write the state on completion — the slower
+	// response can overwrite newer state with an older hash set, marking a
+	// changed note as synced forever.
+	private syncing = false;
 
 	async onload() {
 		await this.loadSettings();
 
-		// This creates an icon in the left ribbon.
-		this.addRibbonIcon('dice', 'Sample', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
-		});
-
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status bar text');
-
-		// This adds a simple command that can be triggered anywhere
 		this.addCommand({
-			id: 'open-modal-simple',
-			name: 'Open modal (simple)',
+			id: "push-published",
+			name: "Push published notes",
 			callback: () => {
-				new SampleModal(this.app).open();
-			}
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'replace-selected',
-			name: 'Replace selected content',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				editor.replaceSelection('Sample editor command');
-			}
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-modal-complex',
-			name: 'Open modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
-
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
-				}
-				return false;
-			}
+				void this.pushPublished();
+			},
 		});
 
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
-
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			new Notice("Click");
+		this.addRibbonIcon("upload-cloud", "Push published notes", () => {
+			void this.pushPublished();
 		});
 
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
-
+		this.addSettingTab(new RoleCallSettingTab(this.app, this));
 	}
 
-	onunload() {
+	async pushPublished(): Promise<void> {
+		if (this.syncing) {
+			new Notice("A sync is already running");
+			return;
+		}
+		this.syncing = true;
+
+		try {
+			const fingerprint = await targetFingerprint(this.settings);
+
+			// Repointed at a different game, server or folder: the incremental
+			// state describes somewhere else. Drop it and send everything —
+			// which also, correctly, emits no deletes, since deletes computed
+			// against the old target would be meaningless against the new one.
+			if (this.syncedTarget !== null && this.syncedTarget !== fingerprint) {
+				this.lastSyncedHashes = {};
+				new Notice("Sync target changed — pushing everything");
+			}
+
+			const engine = new SyncEngine(this.app, this.settings);
+			const next = await engine.push(this.lastSyncedHashes);
+
+			if (next) {
+				this.lastSyncedHashes = next;
+				this.syncedTarget = fingerprint;
+				await this.persist();
+			}
+		} finally {
+			this.syncing = false;
+		}
 	}
 
 	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData() as Partial<MyPluginSettings>);
+		const stored = (await this.loadData()) as
+			| (Partial<RoleCallSyncSettings> & {
+					lastSyncedHashes?: SyncState;
+					syncedTarget?: string;
+			  })
+			| null;
+		this.settings = {
+			apiBaseUrl: stored?.apiBaseUrl ?? DEFAULT_SETTINGS.apiBaseUrl,
+			apiToken: stored?.apiToken ?? DEFAULT_SETTINGS.apiToken,
+			publishedFolder: stored?.publishedFolder ?? DEFAULT_SETTINGS.publishedFolder,
+		};
+		this.lastSyncedHashes = stored?.lastSyncedHashes ?? {};
+		// null (not undefined) when upgrading from a build that never wrote one:
+		// there is no target to compare against, so the first push is trusted
+		// rather than forced into a needless full re-send.
+		this.syncedTarget = stored?.syncedTarget ?? null;
 	}
 
 	async saveSettings() {
-		await this.saveData(this.settings);
-	}
-}
-
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
+		await this.persist();
 	}
 
-	onOpen() {
-		let {contentEl} = this;
-		contentEl.setText('Woah!');
+	async resetSyncState() {
+		this.lastSyncedHashes = {};
+		this.syncedTarget = null;
+		await this.persist();
 	}
 
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
+	private async persist() {
+		await this.saveData({
+			...this.settings,
+			lastSyncedHashes: this.lastSyncedHashes,
+			syncedTarget: this.syncedTarget,
+		});
 	}
 }

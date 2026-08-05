@@ -1,90 +1,105 @@
-# Obsidian Sample Plugin
+# Role Call Sync
 
-This is a sample plugin for Obsidian (https://obsidian.md).
+An Obsidian community plugin that syncs your TTRPG campaign notes to a [Role Call](https://rolecall.games) game. Role Call renders them on your campaign site — wikilinks and frontmatter are parsed there.
 
-This project uses TypeScript to provide type checking and documentation.
-The repo depends on the latest plugin API (obsidian.d.ts) in TypeScript Definition format, which contains TSDoc comments describing what it does.
+## The one rule: `Published/` syncs, everything else stays private
 
-This sample plugin demonstrates some of the basic functionality the plugin API can do.
-- Adds a ribbon icon, which shows a Notice when clicked.
-- Adds a command "Open modal (simple)" which opens a Modal.
-- Adds a plugin setting tab to the settings page.
-- Registers a global click event and output 'click' to the console.
-- Registers a global interval which logs 'setInterval' to the console.
+This plugin uploads **only** the notes inside your `Published/` folder (configurable). Your `GM/`
+notes — secrets, plans, spoilers — are never sent. The Role Call server also enforces this: it
+rejects any path outside the published root, so GM content can't reach it even by accident.
 
-## First time developing plugins?
+> Don't rely on `%%comments%%` or `> [!secret]` callouts to hide things inside a published note —
+> they are **not** hidden. If it shouldn't be seen, keep it in `GM/`.
 
-Quick starting guide for new plugin devs:
+## What it does
 
-- Check if [someone already developed a plugin for what you want](https://obsidian.md/plugins)! There might be an existing plugin similar enough that you can partner up with.
-- Make a copy of this repo as a template with the "Use this template" button (login to GitHub if you don't see it).
-- Clone your repo to a local development folder. For convenience, you can place this folder in your `.obsidian/plugins/your-plugin-name` folder.
-- Install NodeJS, then run `npm i` in the command line under your repo folder.
-- Run `npm run dev` to compile your plugin from `main.ts` to `main.js`.
-- Make changes to `main.ts` (or create new `.ts` files). Those changes should be automatically compiled into `main.js`.
-- Reload Obsidian to load the new version of your plugin.
-- Enable plugin in settings window.
-- For updates to the Obsidian API run `npm update` in the command line under your repo folder.
+- Adds a **Push published notes** ribbon icon (cloud-with-arrow) and a command-palette action.
+- On trigger, sends an **incremental** JSON batch of changed notes + embedded media to Role Call,
+  and deletes notes you've removed. Unchanged files are skipped (it remembers the last sync).
+- Markdown notes become pages; media in `Published/` becomes embeddable images.
 
-## Releasing new releases
+## What it does *not* do (yet)
 
-- Update your `manifest.json` with your new version number, such as `1.0.1`, and the minimum Obsidian version required for your latest release.
-- Update your `versions.json` file with `"new-plugin-version": "minimum-obsidian-version"` so older versions of Obsidian can download an older version of your plugin that's compatible.
-- Create new GitHub release using your new version number as the "Tag version". Use the exact version number, don't include a prefix `v`. See here for an example: https://github.com/obsidianmd/obsidian-sample-plugin/releases
-- Upload the files `manifest.json`, `main.js`, `styles.css` as binary attachments. Note: The manifest.json file must be in two places, first the root path of your repository and also in the release.
-- Publish the release.
+- No automatic / background sync. You push when you want.
+- No pulling content **from** Role Call back into the vault. This is upload-only.
+- No diff preview before pushing.
 
-> You can simplify the version bump process by running `npm version patch`, `npm version minor` or `npm version major` after updating `minAppVersion` manually in `manifest.json`.
-> The command will bump version in `manifest.json` and `package.json`, and add the entry for the new version to `versions.json`
+## Install
 
-## Adding your plugin to the community plugin list
+### Via BRAT (recommended while the plugin is in beta)
 
-- Check the [plugin guidelines](https://docs.obsidian.md/Plugins/Releasing/Plugin+guidelines).
-- Publish an initial version.
-- Make sure you have a `README.md` file in the root of your repo.
-- Make a pull request at https://github.com/obsidianmd/obsidian-releases to add your plugin.
+1. Install the [BRAT](https://github.com/TfTHacker/obsidian42-brat) community plugin and enable it.
+2. Open **Settings → BRAT → Add Beta plugin**.
+3. Paste this repository URL: `https://github.com/camkidman/rolecall-obsidian-sync` (or your fork).
+4. Enable **Role Call Sync** under **Settings → Community plugins**.
 
-## How to use
+### Manually
 
-- Clone this repo.
-- Make sure your NodeJS is at least v16 (`node --version`).
-- `npm i` or `yarn` to install dependencies.
-- `npm run dev` to start compilation in watch mode.
+1. Download `main.js`, `manifest.json`, and `styles.css` from the latest [release](https://github.com/camkidman/rolecall-obsidian-sync/releases).
+2. Drop them into `<YourVault>/.obsidian/plugins/rolecall-sync/`.
+3. Reload Obsidian and enable the plugin under **Settings → Community plugins**.
 
-## Manually installing the plugin
+## Configure
 
-- Copy over `main.js`, `styles.css`, `manifest.json` to your vault `VaultFolder/.obsidian/plugins/your-plugin-id/`.
+Open **Settings → Role Call Sync** and fill in:
 
-## Improve code quality with eslint
-- [ESLint](https://eslint.org/) is a tool that analyzes your code to quickly find problems. You can run ESLint against your plugin to find common bugs and ways to improve your code. 
-- This project already has eslint preconfigured, you can invoke a check by running`npm run lint`
-- Together with a custom eslint [plugin](https://github.com/obsidianmd/eslint-plugin) for Obsidan specific code guidelines.
-- A GitHub action is preconfigured to automatically lint every commit on all branches.
+| Field            | What goes here                                                              |
+| ---------------- | --------------------------------------------------------------------------- |
+| API base URL     | `https://rolecall.games` (default). Change only if you self-host Role Call. |
+| API token        | A personal token. See **How to generate a token** below.                    |
+| Published folder | `Published` (default). Only notes inside this folder are synced.            |
 
-## Funding URL
+The token identifies which game receives the push — there's no separate Game ID setting. If you want to push to a different game, generate a token on that game's page and paste it here.
 
-You can include funding URLs where people who use your plugin can financially support it.
+**Easiest path:** on your game's **Vault Sync** page, click **Download starter vault**. It gives you
+a ready-made vault with the `GM/`+`Published/` folders and this plugin already configured (token
+baked in) — just install the plugin and push.
 
-The simple way is to set the `fundingUrl` field to your link in your `manifest.json` file:
+### How to generate a token
 
-```json
-{
-    "fundingUrl": "https://buymeacoffee.com"
-}
+1. Sign in to Role Call and open the game this vault belongs to.
+2. Go to the game's **Vault Sync** (Tokens) page.
+3. Click **Generate token**, give it a name like `Obsidian`, and copy the token immediately — it's only shown once.
+4. Paste it into the plugin's **API token** setting.
+
+## Push
+
+- Click the cloud-with-arrow ribbon icon, **or**
+- Open the command palette (`Cmd/Ctrl+P`) and run **Role Call: Push published notes**.
+
+You'll see `Syncing published notes…` while it runs and a summary like `Synced: 3 added, 1 updated`
+on success (or `Already up to date`). On failure, the notice explains what went wrong (bad token,
+out-of-date plugin, network).
+
+## Local development
+
+```bash
+git clone https://github.com/camkidman/rolecall-obsidian-sync
+cd rolecall-obsidian-sync
+npm install
+npm run dev    # watch-build to main.js
 ```
 
-If you have multiple URLs, you can also do:
+To test against a real vault, symlink the plugin into a throwaway vault:
 
-```json
-{
-    "fundingUrl": {
-        "Buy Me a Coffee": "https://buymeacoffee.com",
-        "GitHub Sponsor": "https://github.com/sponsors",
-        "Patreon": "https://www.patreon.com/"
-    }
-}
+```bash
+ln -s "$PWD" "/path/to/TestVault/.obsidian/plugins/rolecall-sync"
 ```
 
-## API Documentation
+Install the [Hot Reload](https://github.com/pjeby/hot-reload) plugin in the test vault so changes to `main.js` reload automatically.
 
-See https://docs.obsidian.md
+Production build:
+
+```bash
+npm run build
+```
+
+## Releasing
+
+1. Bump `version` in `manifest.json` and add a matching entry in `versions.json` mapping the new version to the minimum supported Obsidian version.
+2. Tag the release on GitHub with the exact version (no leading `v`), e.g. `0.1.1`.
+3. Attach `manifest.json`, `main.js`, and `styles.css` as individual release assets.
+
+## License
+
+MIT © Framework and Fable LLC — see [LICENSE](LICENSE).
