@@ -2,6 +2,8 @@
 
 An Obsidian community plugin that syncs your TTRPG campaign notes to a [Role Call](https://rolecall.games) game. Role Call renders them on your campaign site — wikilinks and frontmatter are parsed there.
 
+> **Requires a free [Role Call](https://rolecall.games) account.** The plugin pushes notes to a game you run there, authenticated by a per-game API token from that game's **Vault Sync** page (see [Configure](#configure)).
+
 ## The one rule: `Published/` syncs, everything else stays private
 
 This plugin uploads **only** the notes inside your `Published/` folder (configurable). Your `GM/`
@@ -30,12 +32,12 @@ rejects any path outside the published root, so GM content can't reach it even b
 
 1. Install the [BRAT](https://github.com/TfTHacker/obsidian42-brat) community plugin and enable it.
 2. Open **Settings → BRAT → Add Beta plugin**.
-3. Paste this repository URL: `https://github.com/camkidman/rolecall-obsidian-sync` (or your fork).
+3. Paste this repository URL: `https://github.com/rolecall-games/rolecall-obsidian-sync` (or your fork).
 4. Enable **Role Call Sync** under **Settings → Community plugins**.
 
 ### Manually
 
-1. Download `main.js`, `manifest.json`, and `styles.css` from the latest [release](https://github.com/camkidman/rolecall-obsidian-sync/releases).
+1. Download `main.js` and `manifest.json` from the latest [release](https://github.com/rolecall-games/rolecall-obsidian-sync/releases).
 2. Drop them into `<YourVault>/.obsidian/plugins/rolecall-sync/`.
 3. Reload Obsidian and enable the plugin under **Settings → Community plugins**.
 
@@ -74,7 +76,7 @@ out-of-date plugin, network).
 ## Local development
 
 ```bash
-git clone https://github.com/camkidman/rolecall-obsidian-sync
+git clone https://github.com/rolecall-games/rolecall-obsidian-sync
 cd rolecall-obsidian-sync
 npm install
 npm run dev    # watch-build to main.js
@@ -98,7 +100,7 @@ npm run build
 
 1. Bump `version` in `manifest.json` and add a matching entry in `versions.json` mapping the new version to the minimum supported Obsidian version.
 2. Tag the release on GitHub with the exact version (no leading `v`), e.g. `0.1.1`.
-3. Attach `manifest.json`, `main.js`, and `styles.css` as individual release assets.
+3. Attach `manifest.json` and `main.js` as individual release assets.
 
 ## License
 

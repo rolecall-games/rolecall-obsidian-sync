@@ -23,3 +23,4 @@ data.json
 
 # Local-only developer notes / scratch
 developer/
+.claude/
