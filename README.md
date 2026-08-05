@@ -2,7 +2,7 @@
 
 An Obsidian community plugin that syncs your TTRPG campaign notes to a [Role Call](https://rolecall.games) game. Role Call renders them on your campaign site — wikilinks and frontmatter are parsed there.
 
-> **Requires a free [Role Call](https://rolecall.games) account.** The plugin pushes notes to a game you run there, authenticated by a per-game API token from that game's **Vault Sync** page (see [Configure](#configure)).
+> **Requires a free [https://rolecall.games](https://rolecall.games) account.** The plugin pushes notes to a game you run there, authenticated by a per-game API token from that game's **Vault Sync** page (see [Configure](#configure)).
 
 ## The one rule: `Published/` syncs, everything else stays private
 
