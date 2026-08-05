@@ -25,13 +25,11 @@ export class RoleCallSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 
-		/* eslint-disable obsidianmd/ui/sentence-case -- "Role Call" is the product name; lowercase URL placeholder is intentional */
 		new Setting(containerEl)
 			.setName("API base URL")
-			.setDesc("Role Call server origin. Leave the default unless you self-host.")
+			.setDesc("Server origin. Leave the default unless you self-host.")
 			.addText((text) =>
 				text
-					.setPlaceholder("https://rolecall.games")
 					.setValue(this.plugin.settings.apiBaseUrl)
 					.onChange(async (value) => {
 						this.plugin.settings.apiBaseUrl = value;
@@ -41,10 +39,10 @@ export class RoleCallSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("API token")
-			.setDesc("Token from your game's Vault Sync page in Role Call. Identifies which campaign receives the notes.")
+			.setDesc("Token from your game's vault sync page on rolecall.games. Identifies which campaign receives the notes.")
 			.addText((text) => {
 				text
-					.setPlaceholder("paste token")
+					.setPlaceholder("Paste token")
 					.setValue(this.plugin.settings.apiToken)
 					.onChange(async (value) => {
 						this.plugin.settings.apiToken = value;
@@ -55,7 +53,7 @@ export class RoleCallSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Published folder")
-			.setDesc("Only notes inside this folder are synced. Everything else (your GM/ notes) stays private.")
+			.setDesc("Only notes inside this folder are synced. Everything else in the vault stays private.")
 			.addText((text) =>
 				text
 					.setPlaceholder("Published")
@@ -68,13 +66,12 @@ export class RoleCallSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Resync from scratch")
-			.setDesc("Forget what was synced before and push the whole Published folder on the next sync.")
+			.setDesc("Forget what was synced before and push the whole published folder on the next sync.")
 			.addButton((btn) =>
 				btn.setButtonText("Reset sync state").onClick(async () => {
 					await this.plugin.resetSyncState();
 					new Notice("Sync state reset — the next push sends everything");
 				}),
 			);
-		/* eslint-enable obsidianmd/ui/sentence-case */
 	}
 }

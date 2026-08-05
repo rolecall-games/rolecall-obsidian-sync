@@ -64,8 +64,7 @@ export class SyncEngine {
 		const token = this.settings.apiToken.trim();
 
 		if (!baseUrl || !token) {
-			// eslint-disable-next-line obsidianmd/ui/sentence-case -- "Role Call Sync" is the product name
-			new Notice("Configure Role Call Sync in plugin settings");
+			new Notice("Add your API token in the plugin settings first");
 			return null;
 		}
 
@@ -146,8 +145,9 @@ export class SyncEngine {
 			// Record everything currently present as synced, except anything the
 			// server rejected (so it is retried next push).
 			const next: SyncState = {};
-			for (const [path, hash] of Object.entries(currentHashes)) {
-				if (!rejectedPaths.has(path)) next[path] = hash;
+			for (const path of Object.keys(currentHashes)) {
+				const hash = currentHashes[path];
+				if (hash !== undefined && !rejectedPaths.has(path)) next[path] = hash;
 			}
 
 			new Notice(summarize(body, rejected.length));
@@ -162,8 +162,7 @@ export class SyncEngine {
 			return null;
 		}
 		if (status === 409) {
-			// eslint-disable-next-line obsidianmd/ui/sentence-case -- "Role Call Sync" is the product name
-			new Notice("This vault sync is out of date — please update the Role Call Sync plugin");
+			new Notice("This plugin version is out of date — please update it and sync again");
 			return null;
 		}
 		if (status === 413) {
@@ -171,8 +170,7 @@ export class SyncEngine {
 			return null;
 		}
 		if (status === 400) {
-			// eslint-disable-next-line obsidianmd/ui/sentence-case -- "Role Call" is the product name
-			new Notice("Role Call rejected the request (bad payload)");
+			new Notice("The server rejected the request (bad payload)");
 			return null;
 		}
 		new Notice(`Sync failed: HTTP ${status}`);
