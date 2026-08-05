@@ -1,7 +1,7 @@
 {
 	"id": "rolecall-sync",
 	"name": "Role Call Sync",
-	"version": "0.2.1",
+	"version": "0.2.2",
 	"minAppVersion": "1.5.7",
 	"description": "Sync your Published/ notes to a Role Call game. GM notes stay private.",
 	"author": "Framework and Fable",
