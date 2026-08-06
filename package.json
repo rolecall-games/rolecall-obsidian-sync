@@ -1,7 +1,8 @@
 {
 	"name": "obsidian-rolecall-sync",
 	"version": "0.2.2",
-	"description": "Obsidian plugin that syncs your Published/ notes to a Role Call game.",
+	"description": "Obsidian plugin that syncs your Published/ notes to a RoleCall game.",
+	"homepage": "https://rolecall.games",
 	"main": "main.js",
 	"type": "module",
 	"scripts": {

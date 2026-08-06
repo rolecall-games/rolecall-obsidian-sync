@@ -55,17 +55,17 @@ export function startConnectFlow(
 				return;
 			}
 			if (res.status === 409) {
-				new Notice("This plugin version is out of date — update Role Call Sync");
+				new Notice("This plugin version is out of date — update RoleCall Sync");
 				return;
 			}
 			if (res.status !== 201) {
-				new Notice(`Role Call returned HTTP ${res.status}`);
+				new Notice(`RoleCall returned HTTP ${res.status}`);
 				return;
 			}
 			start = res.json as ConnectStart;
 		} catch (err) {
-			console.error("Role Call Sync: connect failed", err);
-			new Notice(`Couldn't reach Role Call: ${baseUrl}`);
+			console.error("RoleCall Sync: connect failed", err);
+			new Notice(`Couldn't reach RoleCall: ${baseUrl}`);
 			return;
 		}
 
@@ -94,7 +94,7 @@ class ConnectModal extends Modal {
 		const { contentEl } = this;
 		contentEl.empty();
 
-		contentEl.createEl("h2", { text: "Connect to Role Call" });
+		contentEl.createEl("h2", { text: "Connect to RoleCall" });
 		contentEl.createEl("p", {
 			text: "Finish in the browser tab that just opened — sign in (or create a free account) and approve. If no tab opened, use the link below.",
 		});
@@ -187,7 +187,7 @@ class ConnectModal extends Modal {
 					return;
 			}
 		} catch (err) {
-			console.error("Role Call Sync: connect poll failed", err);
+			console.error("RoleCall Sync: connect poll failed", err);
 		} finally {
 			this.pollBusy = false;
 		}

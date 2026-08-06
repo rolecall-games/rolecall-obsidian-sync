@@ -27,7 +27,7 @@ export class RoleCallSettingTab extends PluginSettingTab {
 		containerEl.empty();
 
 		new Setting(containerEl)
-			.setName("Connect to Role Call")
+			.setName("Connect to RoleCall")
 			.setDesc(
 				"Link this vault to a campaign — sign in (or create a free account) in your browser and the token below is filled in for you. No copy-paste.",
 			)
@@ -59,7 +59,21 @@ export class RoleCallSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("API token")
-			.setDesc("Filled by Connect to Role Call, or paste a token from your game's vault sync page on rolecall.games. Identifies which campaign receives the notes.")
+			// A fragment rather than a string so the address is clickable — this
+			// is the one place a GM has to go somewhere else to continue, and
+			// the page name has already changed once ("Vault Sync" → "Plugins").
+			.setDesc(
+				createFragment((frag) => {
+					frag.appendText(
+						"Filled by Connect to RoleCall, or paste a token from your game's Plugins page on ",
+					);
+					frag.createEl("a", {
+						text: "rolecall.games",
+						href: "https://rolecall.games",
+					});
+					frag.appendText(". Identifies which campaign receives the notes.");
+				}),
+			)
 			.addText((text) => {
 				text
 					.setPlaceholder("Paste token")

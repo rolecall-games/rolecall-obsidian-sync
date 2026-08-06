@@ -40,7 +40,7 @@ export class MissingFolderError extends Error {
 }
 
 /**
- * One push of the published folder to a Role Call game.
+ * One push of the published folder to a RoleCall game.
  *
  * The engine owns collection, diffing and the request; the plugin owns the
  * persisted state and hands it in. Keeping the two apart is what makes the
@@ -80,7 +80,7 @@ export class SyncEngine {
 				new Notice(`Published folder not found: ${err.folderPath}`);
 				return null;
 			}
-			console.error("Role Call Sync: failed to read published notes", err);
+			console.error("RoleCall Sync: failed to read published notes", err);
 			new Notice("Couldn't read the published notes folder");
 			return null;
 		}
@@ -125,8 +125,8 @@ export class SyncEngine {
 				throw: false,
 			});
 		} catch (err) {
-			console.error("Role Call Sync: request failed", err);
-			new Notice(`Couldn't reach Role Call: ${baseUrl}`);
+			console.error("RoleCall Sync: request failed", err);
+			new Notice(`Couldn't reach RoleCall: ${baseUrl}`);
 			return null;
 		}
 
@@ -154,7 +154,7 @@ export class SyncEngine {
 
 			new Notice(summarize(body, rejected.length));
 			if (rejected.length > 0) {
-				console.warn("Role Call Sync: server rejected paths", rejected);
+				console.warn("RoleCall Sync: server rejected paths", rejected);
 			}
 			return next;
 		}
