@@ -1,4 +1,5 @@
 import { App, Notice, PluginSettingTab, Setting } from "obsidian";
+import { startConnectFlow } from "./connect";
 import type RoleCallSyncPlugin from "./main";
 
 export interface RoleCallSyncSettings {
@@ -26,6 +27,25 @@ export class RoleCallSettingTab extends PluginSettingTab {
 		containerEl.empty();
 
 		new Setting(containerEl)
+			.setName("Connect to Role Call")
+			.setDesc(
+				"Link this vault to a campaign — sign in (or create a free account) in your browser and the token below is filled in for you. No copy-paste.",
+			)
+			.addButton((btn) =>
+				btn
+					.setButtonText("Connect")
+					.setCta()
+					.onClick(() => {
+						startConnectFlow(this.plugin, {
+							onConnected: () => {
+								this.display();
+								void this.plugin.pushPublished();
+							},
+						});
+					}),
+			);
+
+		new Setting(containerEl)
 			.setName("API base URL")
 			.setDesc("Server origin. Leave the default unless you self-host.")
 			.addText((text) =>
@@ -39,7 +59,7 @@ export class RoleCallSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("API token")
-			.setDesc("Token from your game's vault sync page on rolecall.games. Identifies which campaign receives the notes.")
+			.setDesc("Filled by Connect to Role Call, or paste a token from your game's vault sync page on rolecall.games. Identifies which campaign receives the notes.")
 			.addText((text) => {
 				text
 					.setPlaceholder("Paste token")

@@ -10,7 +10,6 @@ import {
 import {
 	AttachmentEntry,
 	CLIENT_NAME,
-	CLIENT_VERSION,
 	MEDIA_EXTENSIONS,
 	NoteEntry,
 	RejectedPath,
@@ -53,6 +52,9 @@ export class SyncEngine {
 	constructor(
 		private readonly app: App,
 		private readonly settings: RoleCallSyncSettings,
+		// The manifest's version, threaded in by the plugin — the wire
+		// `client_version` must never be a hand-maintained copy (it drifted).
+		private readonly clientVersion: string,
 	) {}
 
 	/**
@@ -103,7 +105,7 @@ export class SyncEngine {
 		const payload: SyncPayload = {
 			sync_version: SYNC_VERSION,
 			client: CLIENT_NAME,
-			client_version: CLIENT_VERSION,
+			client_version: this.clientVersion,
 			notes: changedNotes,
 			attachments: changedAttachments,
 			deleted_paths: deletedPaths,

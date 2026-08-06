@@ -7,10 +7,30 @@
 // `CLIENT_VERSION`.
 
 export const CLIENT_NAME = "obsidian-plugin";
-export const CLIENT_VERSION = "0.2.0";
 export const SYNC_VERSION = 3;
 
 export const VAULT_IMPORTS_PATH = "/api/v1/vault_imports";
+
+// The device-code activation handshake (rolecall-meta/contracts/
+// plugin-connect.md) carries its own version canary, independent of the
+// vault-imports sync_version. The client version sent on the wire is the
+// manifest's — threaded in from the plugin instance, never a third
+// hand-maintained copy (it drifted to "0.2.0" while the manifest read 0.2.2).
+export const CONNECT_PROTOCOL_VERSION = 1;
+export const PLUGIN_CONNECT_PATH = "/api/v1/plugin_connect";
+
+export interface ConnectStart {
+	protocol_version: number;
+	user_code: string;
+	device_code: string;
+	connect_url: string;
+	poll_interval_seconds: number;
+	expires_in_seconds: number;
+}
+
+export type ConnectPoll =
+	| { status: "pending" | "denied" | "expired" | "consumed" }
+	| { status: "approved"; token: string; game: { id: string; name: string; url: string } };
 
 // Mirrors the server's attachment allowlist (RoleCall.Obsidian.PathSafety).
 // Anything under the published folder that isn't markdown or one of these is

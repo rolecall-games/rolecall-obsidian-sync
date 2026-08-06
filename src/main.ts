@@ -1,4 +1,5 @@
 import { Notice, Plugin } from "obsidian";
+import { startConnectFlow } from "./connect";
 import { DEFAULT_SETTINGS, RoleCallSettingTab, RoleCallSyncSettings } from "./settings";
 import { SyncEngine, SyncState } from "./sync";
 import { targetFingerprint } from "./util";
@@ -47,6 +48,15 @@ export default class RoleCallSyncPlugin extends Plugin {
 			new Notice("A sync is already running");
 			return;
 		}
+
+		// First run: no token yet. Offer the connect flow instead of a
+		// dead-end "paste a token" notice; its success screen offers the push
+		// this click was asking for.
+		if (!this.settings.apiToken.trim()) {
+			startConnectFlow(this, { onConnected: () => void this.pushPublished() });
+			return;
+		}
+
 		this.syncing = true;
 
 		try {
@@ -61,7 +71,7 @@ export default class RoleCallSyncPlugin extends Plugin {
 				new Notice("Sync target changed — pushing everything");
 			}
 
-			const engine = new SyncEngine(this.app, this.settings);
+			const engine = new SyncEngine(this.app, this.settings, this.manifest.version);
 			const next = await engine.push(this.lastSyncedHashes);
 
 			if (next) {

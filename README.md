@@ -43,7 +43,14 @@ rejects any path outside the published root, so GM content can't reach it even b
 
 ## Configure
 
-Open **Settings → Role Call Sync** and fill in:
+**Fastest path — Connect to Role Call.** Open **Settings → Role Call Sync** and click
+**Connect** (or just hit the ribbon's push button with no token set). Your browser opens on
+rolecall.games showing the same code as the plugin — sign in or create a free account right
+there, pick the campaign this vault should publish to (or create one, prenamed after the
+vault), and approve. The token lands in the plugin by itself; nothing to paste. Connecting
+uploads nothing from your vault — the first push is its own explicit step.
+
+Prefer to wire it by hand? Open **Settings → Role Call Sync** and fill in:
 
 | Field            | What goes here                                                              |
 | ---------------- | --------------------------------------------------------------------------- |
