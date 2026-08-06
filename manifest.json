@@ -1,7 +1,7 @@
 {
 	"id": "rolecall-sync",
 	"name": "RoleCall Sync",
-	"version": "0.2.2",
+	"version": "0.2.4",
 	"minAppVersion": "1.5.7",
 	"description": "Publish your campaign notes to your RoleCall game. Only your Published/ folder is ever sent — GM/ never leaves this vault, and the server enforces that boundary too, not just the plugin.",
 	"author": "Framework and Fable",
