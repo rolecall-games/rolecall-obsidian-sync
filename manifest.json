@@ -3,7 +3,7 @@
 	"name": "RoleCall Sync",
 	"version": "0.2.2",
 	"minAppVersion": "1.5.7",
-	"description": "Sync your Published/ notes to a RoleCall game. GM notes stay private.",
+	"description": "Publish your campaign notes to your RoleCall game. Only your Published/ folder is ever sent — GM/ never leaves this vault, and the server enforces that boundary too, not just the plugin.",
 	"author": "Framework and Fable",
 	"authorUrl": "https://rolecall.games",
 	"isDesktopOnly": false
