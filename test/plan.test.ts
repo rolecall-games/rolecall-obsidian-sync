@@ -7,17 +7,25 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { AttachmentEntry, NoteEntry } from "../src/api";
 import {
+	baseHash,
 	claimsGmRoot,
+	classifyPull,
 	foldersOverlap,
+	forgetAgreed,
 	gmWirePath,
+	goneFromRemote,
 	isGmWirePath,
 	isInsideFolder,
 	isVaultRoot,
+	localPathFor,
 	placeLooseMedia,
+	planPull,
 	planPush,
+	recordAgreed,
+	type PullState,
 	type Snapshot,
 } from "../src/plan";
-import { summarize, withHeldBack } from "../src/util";
+import { explainPullFailure, summarize, summarizePull, withHeldBack } from "../src/util";
 
 const note = (path: string, hash: string): NoteEntry => ({
 	path,
@@ -353,5 +361,217 @@ describe("the end-of-push notice", () => {
 		assert.match(withHeldBack("Already up to date", 2), /^Already up to date — 2 not sent: /);
 		assert.equal(withHeldBack("Already up to date", 0), "Already up to date");
 		assert.match(summarize(undefined, 0, 1), /^Synced — 1 not sent: a folder named GM/);
+	});
+});
+
+describe("a push says which version each change was made from", () => {
+	it("sends the last synced hash as base_hash for a changed note", () => {
+		const plan = planPush({ "A.md": "a1" }, snapshot([note("A.md", "a2")]), "off");
+		assert.equal(plan.notes[0]?.base_hash, "a1");
+	});
+
+	it("sends none for a note it has no record of", () => {
+		const plan = planPush({}, snapshot([note("New.md", "n1")]), "off");
+		assert.equal(plan.notes[0]?.base_hash, undefined);
+		assert.equal("base_hash" in (plan.notes[0] ?? {}), false);
+	});
+
+	it("falls back to the pull's record for a GM note that was never pushed", () => {
+		const plan = planPush(
+			{},
+			snapshot([note("GM/Heist.md", "edited")]),
+			"synced",
+			{ "GM/Heist.md": "pulled" },
+		);
+		assert.equal(plan.notes[0]?.base_hash, "pulled");
+	});
+
+	it("the pull's record never causes a delete", () => {
+		const plan = planPush({ "A.md": "a1" }, snapshot([note("A.md", "a1")]), "off", {
+			"GM/Heist.md": "pulled",
+		});
+		assert.deepEqual(plan.deletedPaths, []);
+		assert.deepEqual(plan.roots, ["published"]);
+		assert.equal(plan.isNoop, true);
+	});
+});
+
+describe("what a pull does about one file", () => {
+	it("creates what is new on RoleCall", () => {
+		assert.equal(classifyPull("r1", undefined, undefined, false), "create");
+	});
+
+	it("does not resurrect a file deleted here since the last sync", () => {
+		assert.equal(classifyPull("r1", undefined, "r1", false), "deleted-here");
+		assert.equal(classifyPull("r1", undefined, "old", true), "deleted-here");
+	});
+
+	it("leaves identical files alone", () => {
+		assert.equal(classifyPull("same", "same", undefined, false), "same");
+		assert.equal(classifyPull("same", "same", "old", true), "same");
+	});
+
+	it("updates a file the vault has not touched since the last sync", () => {
+		assert.equal(classifyPull("r2", "l1", "l1", false), "update");
+	});
+
+	it("leaves a file only the vault changed for the next push", () => {
+		assert.equal(classifyPull("r1", "l2", "r1", false), "local-ahead");
+	});
+
+	it("never overwrites a file changed on both sides", () => {
+		assert.equal(classifyPull("r2", "l2", "base", false), "conflict");
+	});
+
+	it("never overwrites a differing file it has no history for", () => {
+		assert.equal(classifyPull("r1", "l1", undefined, false), "conflict");
+	});
+
+	it("treats a conflict parked on RoleCall as a conflict, even where it would otherwise update", () => {
+		// The push that parked it recorded the vault's hash, so by the hashes
+		// alone this looks like "untouched here, changed there".
+		assert.equal(classifyPull("app", "vault", "vault", true), "conflict");
+	});
+});
+
+describe("planPull", () => {
+	const state: PullState = { synced: { "Edited.md": "e1", "Mine.md": "m1" }, pulled: {} };
+	const local = { "Edited.md": "e1", "Mine.md": "m2", "Both.md": "b-local", "Same.md": "s1" };
+
+	it("sorts RoleCall's files into add, update, conflict and identical", () => {
+		const plan = planPull(
+			[
+				{ path: "New.md", content_hash: "n1" },
+				{ path: "Edited.md", content_hash: "e2" },
+				{ path: "Mine.md", content_hash: "m1" },
+				{ path: "Both.md", content_hash: "b-remote" },
+				{ path: "Same.md", content_hash: "s1" },
+			],
+			local,
+			state,
+		);
+
+		assert.deepEqual(plan.create, ["New.md"]);
+		assert.deepEqual(plan.update, ["Edited.md"]);
+		assert.deepEqual(plan.conflicts, ["Both.md"]);
+		assert.deepEqual(plan.same, [{ path: "Same.md", hash: "s1", parked: false }]);
+	});
+
+	it("marks an identical file RoleCall still has a conflict parked on", () => {
+		const plan = planPull(
+			[{ path: "Same.md", content_hash: "s1", conflict: true }],
+			{ "Same.md": "s1" },
+			{ synced: { "Same.md": "s1" }, pulled: {} },
+		);
+		assert.deepEqual(plan.same, [{ path: "Same.md", hash: "s1", parked: true }]);
+		assert.deepEqual(plan.conflicts, []);
+	});
+
+	it("uses the pull's own record as the base for an unpushed GM note", () => {
+		const plan = planPull(
+			[{ path: "GM/Heist.md", content_hash: "h2" }],
+			{ "GM/Heist.md": "h1" },
+			{ synced: {}, pulled: { "GM/Heist.md": "h1" } },
+		);
+		assert.deepEqual(plan.update, ["GM/Heist.md"]);
+	});
+});
+
+describe("where a pull records what it agreed on", () => {
+	it("published paths go in the push state", () => {
+		const state: PullState = { synced: {}, pulled: {} };
+		recordAgreed(state, "Town.md", "t1", false);
+		assert.deepEqual(state, { synced: { "Town.md": "t1" }, pulled: {} });
+	});
+
+	it("GM paths stay OUT of the push state while the GM folder is not pushed", () => {
+		const state: PullState = { synced: {}, pulled: {} };
+		recordAgreed(state, "GM/Heist.md", "h1", false);
+		assert.deepEqual(state, { synced: {}, pulled: { "GM/Heist.md": "h1" } });
+	});
+
+	it("so the next push does not ask RoleCall to delete the GM notes it just pulled", () => {
+		// In the push state, a GM path with the switch off IS that request:
+		// it is how switching the GM folder off cleans up.
+		const state: PullState = { synced: { "A.md": "a1" }, pulled: {} };
+		recordAgreed(state, "GM/Heist.md", "h1", false);
+		recordAgreed(state, "GM/_att/map.png", "m1", false);
+
+		const plan = planPush(state.synced, snapshot([note("A.md", "a1")]), "off", state.pulled);
+		assert.deepEqual(plan.deletedPaths, []);
+		assert.equal(plan.gmRemovals, 0);
+		assert.deepEqual(plan.roots, ["published"]);
+	});
+
+	it("GM paths go in the push state once the GM folder is pushed, and leave the pull's record", () => {
+		const state: PullState = { synced: {}, pulled: { "GM/Heist.md": "h1" } };
+		recordAgreed(state, "GM/Heist.md", "h2", true);
+		assert.deepEqual(state, { synced: { "GM/Heist.md": "h2" }, pulled: {} });
+	});
+
+	it("forgetting a path makes the next push send it whole, and deletes nothing", () => {
+		const state: PullState = { synced: { "A.md": "a1", "B.md": "b1" }, pulled: {} };
+		forgetAgreed(state, "B.md");
+
+		const plan = planPush(state.synced, snapshot([note("A.md", "a1"), note("B.md", "b1")]), "off");
+		assert.deepEqual(
+			plan.notes.map((n) => n.path),
+			["B.md"],
+		);
+		assert.equal(plan.notes[0]?.base_hash, undefined);
+		assert.deepEqual(plan.deletedPaths, []);
+	});
+
+	it("the push state wins when both hold a path", () => {
+		assert.equal(baseHash({ synced: { "P.md": "s" }, pulled: { "P.md": "p" } }, "P.md"), "s");
+		assert.equal(baseHash({ synced: {}, pulled: { "P.md": "p" } }, "P.md"), "p");
+		assert.equal(baseHash({ synced: {}, pulled: {} }, "P.md"), undefined);
+	});
+});
+
+describe("files RoleCall no longer has", () => {
+	it("are the ones this vault synced before and still holds", () => {
+		const gone = goneFromRemote(
+			["Kept.md"],
+			{ "Kept.md": "k", "Moved.md": "m", "NeverPushed.md": "n", "GM/Old.md": "o" },
+			{ synced: { "Kept.md": "k", "Moved.md": "m" }, pulled: { "GM/Old.md": "o" } },
+		);
+		// A file never synced is simply unpushed, not removed.
+		assert.deepEqual(gone, ["GM/Old.md", "Moved.md"]);
+	});
+});
+
+describe("where a pulled file lands", () => {
+	it("published paths under the published folder, GM paths under the GM folder", () => {
+		assert.equal(localPathFor("NPCs/Bob.md", "Published", "GM"), "Published/NPCs/Bob.md");
+		assert.equal(localPathFor("GM/Plots/Heist.md", "Published", "Secrets"), "Secrets/Plots/Heist.md");
+		assert.equal(localPathFor("_att/map.png", "Campaign/Out", "GM"), "Campaign/Out/_att/map.png");
+	});
+
+	it("a GM path has nowhere to go when no GM folder is set", () => {
+		assert.equal(localPathFor("GM/Plots/Heist.md", "Published", ""), null);
+		assert.equal(localPathFor("GM/Plots/Heist.md", "Published", "/"), null);
+	});
+});
+
+describe("the end-of-pull notice", () => {
+	it("says what came down", () => {
+		assert.equal(summarizePull({ added: 3, updated: 1, failed: 0 }, 0, 0, 0), "Pulled: 3 added, 1 updated");
+		assert.equal(summarizePull({ added: 0, updated: 0, failed: 0 }, 0, 0, 0), "Already up to date");
+	});
+
+	it("says what it did not do, and why", () => {
+		const message = summarizePull({ added: 1, updated: 0, failed: 2 }, 3, 1, 4);
+		assert.match(message, /^Pulled: 1 added/);
+		assert.match(message, /3 changed in both places \(your copy was kept\)/);
+		assert.match(message, /2 failed/);
+		assert.match(message, /4 GM files skipped: set a GM folder/);
+		assert.match(message, /1 removed on RoleCall is still in this vault/);
+	});
+
+	it("tells a push-only token how to get the permission", () => {
+		assert.match(explainPullFailure({ status: 403 }), /can push notes but not pull them/);
+		assert.match(explainPullFailure({ status: 404 }), /doesn't support pulling/);
+		assert.match(explainPullFailure({ status: 401 }), /Invalid or revoked token/);
 	});
 });

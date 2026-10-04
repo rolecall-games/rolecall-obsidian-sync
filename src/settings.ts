@@ -8,7 +8,8 @@ export interface RoleCallSyncSettings {
 	apiToken: string;
 	publishedFolder: string;
 	// Off unless the GM turns it on. While it is off, nothing under the GM
-	// folder is read, let alone sent.
+	// folder is ever sent. (A pull still reads it, locally, to compare against
+	// RoleCall's GM notes — see `PullEngine`.)
 	syncGmFolder: boolean;
 	gmFolder: string;
 }
@@ -166,7 +167,7 @@ export class RoleCallSettingTab extends PluginSettingTab {
 			},
 			{
 				name: "Also push my GM folder",
-				desc: "Off by default. When on, notes in your GM folder are sent to RoleCall too, where only GMs of the campaign can ever read them — players never see them, not even as a link. Turning this off removes them from RoleCall on your next push.",
+				desc: "Off by default. When on, notes in your GM folder are sent to RoleCall too, where only GMs of the campaign can ever read them — players never see them, not even as a link. Turning this off removes them from RoleCall on your next push. Pulling is separate: it always brings GM notes written on RoleCall into your GM folder.",
 				build: (setting) => {
 					setting.addToggle((toggle) =>
 						toggle.setValue(this.plugin.settings.syncGmFolder).onChange(async (value) => {
@@ -178,7 +179,7 @@ export class RoleCallSettingTab extends PluginSettingTab {
 			},
 			{
 				name: "GM folder",
-				desc: "The folder that holds your GM-only notes. Only read when the switch above is on, and it must not be inside your published folder.",
+				desc: "The folder that holds your GM-only notes. GM notes you pull from RoleCall land here. It is only sent when the switch above is on, and it must not be inside your published folder.",
 				build: (setting) => {
 					setting.addText((text) =>
 						text
@@ -193,7 +194,7 @@ export class RoleCallSettingTab extends PluginSettingTab {
 			},
 			{
 				name: "Resync from scratch",
-				desc: "Forget what was synced before and push everything again on the next sync. If you mean to stop syncing your GM folder, turn that off and push first — after a reset the plugin no longer knows which GM notes to remove.",
+				desc: "Forget what was synced before and push everything again on the next sync. If you mean to stop syncing your GM folder, turn that off and push first — after a reset the plugin no longer knows which GM notes to remove. After a reset, a pull asks about every note that differs instead of updating it.",
 				build: (setting) => {
 					setting.addButton((btn) =>
 						btn.setButtonText("Reset sync state").onClick(async () => {

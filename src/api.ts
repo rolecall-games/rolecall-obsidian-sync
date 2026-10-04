@@ -19,6 +19,16 @@ export type SyncRoot = "published" | "gm";
 
 export const VAULT_IMPORTS_PATH = "/api/v1/vault_imports";
 
+// The pull (rolecall-meta/contracts/vault-pull.md) is a contract of its own
+// with its own canary: three reads that need a token holding `notes:read`.
+export const PULL_SYNC_VERSION = 1;
+export const VAULT_MANIFEST_PATH = "/api/v1/vault/manifest";
+export const VAULT_NOTES_PATH = "/api/v1/vault/notes";
+export const VAULT_ATTACHMENT_PATH = "/api/v1/vault/attachment";
+
+// The most paths one notes request may name (the server's ceiling is 200).
+export const PULL_NOTES_CHUNK = 100;
+
 // The device-code activation handshake (rolecall-meta/contracts/
 // plugin-connect.md) carries its own version canary, independent of the
 // vault-imports sync_version. The client version sent on the wire is the
@@ -53,6 +63,11 @@ export interface NoteEntry {
 	path: string;
 	markdown: string;
 	content_hash: string;
+	// The hash of the version this change was made from, when the plugin has a
+	// record of one. It is what lets RoleCall tell an edit made on top of a
+	// note it edited (apply it) from one made without seeing that edit (park
+	// it for the GM).
+	base_hash?: string;
 }
 
 export interface AttachmentEntry {
@@ -89,6 +104,32 @@ export interface SyncResponse {
 export interface VersionMismatch {
 	sync_version?: number;
 	min_sync_version?: number;
+}
+
+export interface ManifestNote {
+	path: string;
+	content_hash: string;
+	// A sync conflict is parked on this note on RoleCall and nobody has
+	// settled it.
+	conflict?: boolean;
+}
+
+export interface ManifestAttachment {
+	path: string;
+	content_hash: string;
+	byte_size?: number;
+}
+
+export interface VaultManifest {
+	sync_version?: number;
+	min_sync_version?: number;
+	notes?: ManifestNote[];
+	attachments?: ManifestAttachment[];
+	folders?: string[];
+}
+
+export interface VaultNotesResponse {
+	notes?: NoteEntry[];
 }
 
 export interface SyncPayload {

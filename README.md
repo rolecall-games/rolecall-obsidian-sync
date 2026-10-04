@@ -52,12 +52,15 @@ to edit on RoleCall is kept there and flagged for you to decide, rather than del
 - Markdown notes become pages; media in a synced folder, or embedded by a synced note, becomes
   images on those pages. Stop embedding an image from outside the folders and the next push removes
   it from RoleCall.
+- Adds a **Pull notes from RoleCall** command that brings down what was written or changed on
+  RoleCall — by you or your players — see [Pull](#pull).
 
 ## What it does *not* do (yet)
 
-- No automatic / background sync. You push when you want.
-- No pulling content **from** RoleCall back into the vault. This is upload-only.
-- No diff preview before pushing.
+- No automatic / background sync. You push and pull when you want.
+- A pull never deletes or renames anything in your vault. A note deleted or moved on RoleCall stays
+  where it was here; the pull tells you how many there are.
+- No diff preview before pushing or pulling.
 
 ## Install
 
@@ -125,6 +128,39 @@ what went wrong (bad token, out-of-date plugin, network).
 If the GM folder is switched on but can't be found (renamed, or a typo in the setting), the push
 carries your published notes only and leaves the GM notes already on RoleCall untouched — a folder
 the plugin can't find is never treated as "delete them all".
+
+## Pull
+
+Open the command palette and run **RoleCall Sync: Pull notes from RoleCall**.
+
+A pull brings down every note, folder and image that is new or changed on RoleCall — notes you wrote
+in the campaign's notes workspace, notes your players wrote, edits made there to notes that came
+from this vault. Published notes land in your published folder; GM-only notes land in your GM
+folder, **whether or not you push that folder** (pulling them sends nothing).
+
+What it will and won't do to your files:
+
+| Your copy | RoleCall's copy | A pull… |
+| --------- | --------------- | ------- |
+| doesn't exist | new | **adds** it |
+| unchanged since the last sync | changed | **updates** it |
+| changed | unchanged | leaves it — your next push sends it |
+| changed | changed | **leaves it exactly as it is**, and asks you afterwards |
+| deleted by you | still there | leaves it deleted — your next push tells RoleCall |
+| still there | deleted or moved | leaves it — a pull never deletes or renames |
+
+When something changed in both places, a dialog lists those notes after the pull with two buttons
+each: **Keep mine** (your copy stands, and your next push makes it RoleCall's version too) or
+**Use RoleCall's** (your copy is replaced). Anything you don't decide is asked about again next
+time. Nothing is ever overwritten without that choice.
+
+**Pulling needs permission to read your campaign's notes**, which tokens from before 0.3.0 don't
+have — they could only push, on purpose. If a pull says the token can't pull, open
+**Settings → RoleCall Sync** and click **Connect** once; that grants it. (If you paste tokens by
+hand, tick the pull box when generating one on the **Plugins** page.)
+
+The comparison is done on your device: RoleCall sends a list of what it holds, and nothing about
+your local files — names or contents — is sent up to make it.
 
 ## Local development
 

@@ -1,13 +1,16 @@
 import { Notice, Plugin } from "obsidian";
+import { ConflictModal } from "./conflicts";
 import { startConnectFlow } from "./connect";
-import type { SyncState } from "./plan";
+import type { PullState, SyncState } from "./plan";
+import { PullConflict, PullEngine } from "./pull";
 import { DEFAULT_SETTINGS, RoleCallSettingTab, RoleCallSyncSettings } from "./settings";
 import { SyncEngine } from "./sync";
 import { targetFingerprint } from "./util";
 
 /**
- * Plugin lifecycle only: register the command and ribbon, load/save settings,
- * and own the persisted sync state. The push itself lives in `SyncEngine`.
+ * Plugin lifecycle only: register the commands and ribbon, load/save settings,
+ * and own the persisted sync state. The push lives in `SyncEngine`, the pull
+ * in `PullEngine`.
  */
 export default class RoleCallSyncPlugin extends Plugin {
 	settings: RoleCallSyncSettings = DEFAULT_SETTINGS;
@@ -17,14 +20,18 @@ export default class RoleCallSyncPlugin extends Plugin {
 	// changed and emit explicit deletes.
 	private lastSyncedHashes: SyncState = {};
 
+	// GM notes a pull brought down while the GM folder was not being pushed.
+	// Kept out of `lastSyncedHashes` on purpose — see `PullState`.
+	private lastPulledHashes: SyncState = {};
+
 	// Which server/game/folder `lastSyncedHashes` was built against. See
 	// `targetFingerprint`; a mismatch invalidates the whole state.
 	private syncedTarget: string | null = null;
 
-	// One push at a time. Both the command and the ribbon call pushNotes,
-	// and two overlapping runs each write the state on completion — the slower
-	// response can overwrite newer state with an older hash set, marking a
-	// changed note as synced forever.
+	// One push OR pull at a time. Both the command and the ribbon call
+	// pushNotes, and two overlapping runs each write the state on completion —
+	// the slower response can overwrite newer state with an older hash set,
+	// marking a changed note as synced forever. A pull writes the same state.
 	private syncing = false;
 
 	async onload() {
@@ -45,6 +52,14 @@ export default class RoleCallSyncPlugin extends Plugin {
 
 		this.addRibbonIcon("upload-cloud", "Push notes to RoleCall", () => {
 			void this.pushNotes();
+		});
+
+		this.addCommand({
+			id: "pull-notes",
+			name: "Pull notes from RoleCall",
+			callback: () => {
+				void this.pullNotes();
+			},
 		});
 
 		this.addSettingTab(new RoleCallSettingTab(this.app, this));
@@ -73,15 +88,21 @@ export default class RoleCallSyncPlugin extends Plugin {
 			// state describes somewhere else. Drop it and send everything —
 			// which also, correctly, emits no deletes, since deletes computed
 			// against the old target would be meaningless against the new one.
-			if (this.syncedTarget !== null && this.syncedTarget !== fingerprint) {
-				this.lastSyncedHashes = {};
+			if (this.forgetIfRetargeted(fingerprint)) {
 				new Notice("Sync target changed — pushing everything");
 			}
 
 			const engine = new SyncEngine(this.app, this.settings, this.manifest.version);
-			const next = await engine.push(this.lastSyncedHashes);
+			const next = await engine.push(this.lastSyncedHashes, this.lastPulledHashes);
 
 			if (next) {
+				// What this push told RoleCall to remove is no longer something
+				// the pull should remember agreeing on — or it would report every
+				// one of those files, on every pull, as "removed on RoleCall".
+				for (const path of Object.keys(this.lastSyncedHashes)) {
+					if (!(path in next)) delete this.lastPulledHashes[path];
+				}
+
 				this.lastSyncedHashes = next;
 				this.syncedTarget = fingerprint;
 				await this.persist();
@@ -91,10 +112,92 @@ export default class RoleCallSyncPlugin extends Plugin {
 		}
 	}
 
+	/**
+	 * Bring down what was written or changed on RoleCall. Adds and updates
+	 * only; anything changed on both sides is offered as a choice afterwards.
+	 */
+	async pullNotes(): Promise<void> {
+		if (this.syncing) {
+			new Notice("A sync is already running");
+			return;
+		}
+
+		if (!this.settings.apiToken.trim()) {
+			startConnectFlow(this, { onConnected: () => void this.pullNotes() });
+			return;
+		}
+
+		this.syncing = true;
+		let conflicts: PullConflict[] = [];
+
+		try {
+			const fingerprint = await targetFingerprint(this.settings);
+
+			// A different game or folder: nothing we remember describes it, so
+			// every file that differs is a conflict to choose, never an
+			// overwrite decided from another campaign's history.
+			if (this.forgetIfRetargeted(fingerprint)) {
+				new Notice("Sync target changed — comparing everything");
+			}
+
+			const outcome = await new PullEngine(this.app, this.settings).pull(this.pullState());
+
+			if (outcome) {
+				this.adopt(outcome.state);
+				this.syncedTarget = fingerprint;
+				await this.persist();
+				conflicts = outcome.conflicts;
+			}
+		} finally {
+			this.syncing = false;
+		}
+
+		if (conflicts.length > 0) this.offerConflicts(conflicts);
+	}
+
+	// Each choice is applied and saved as it is made, so closing the dialog
+	// half-way keeps what was chosen and re-offers the rest next pull.
+	private offerConflicts(conflicts: PullConflict[]): void {
+		const engine = new PullEngine(this.app, this.settings);
+
+		new ConflictModal(this.app, conflicts, {
+			useRemote: async (conflict) => {
+				const next = await engine.takeRemote(conflict, this.pullState());
+				if (!next) return false;
+				this.adopt(next);
+				await this.persist();
+				return true;
+			},
+			keepMine: async (conflict) => {
+				this.adopt(engine.keepMine(conflict, this.pullState()));
+				await this.persist();
+			},
+		}).open();
+	}
+
+	private pullState(): PullState {
+		return { synced: this.lastSyncedHashes, pulled: this.lastPulledHashes };
+	}
+
+	private adopt(state: PullState): void {
+		this.lastSyncedHashes = state.synced;
+		this.lastPulledHashes = state.pulled;
+	}
+
+	// True when the state was built against a different target and has just
+	// been dropped.
+	private forgetIfRetargeted(fingerprint: string): boolean {
+		if (this.syncedTarget === null || this.syncedTarget === fingerprint) return false;
+		this.lastSyncedHashes = {};
+		this.lastPulledHashes = {};
+		return true;
+	}
+
 	async loadSettings() {
 		const stored = (await this.loadData()) as
 			| (Partial<RoleCallSyncSettings> & {
 					lastSyncedHashes?: SyncState;
+					lastPulledHashes?: SyncState;
 					syncedTarget?: string;
 			  })
 			| null;
@@ -108,6 +211,7 @@ export default class RoleCallSyncPlugin extends Plugin {
 			gmFolder: stored?.gmFolder ?? DEFAULT_SETTINGS.gmFolder,
 		};
 		this.lastSyncedHashes = stored?.lastSyncedHashes ?? {};
+		this.lastPulledHashes = stored?.lastPulledHashes ?? {};
 		// null (not undefined) when upgrading from a build that never wrote one:
 		// there is no target to compare against, so the first push is trusted
 		// rather than forced into a needless full re-send.
@@ -120,6 +224,7 @@ export default class RoleCallSyncPlugin extends Plugin {
 
 	async resetSyncState() {
 		this.lastSyncedHashes = {};
+		this.lastPulledHashes = {};
 		this.syncedTarget = null;
 		await this.persist();
 	}
@@ -128,6 +233,7 @@ export default class RoleCallSyncPlugin extends Plugin {
 		await this.saveData({
 			...this.settings,
 			lastSyncedHashes: this.lastSyncedHashes,
+			lastPulledHashes: this.lastPulledHashes,
 			syncedTarget: this.syncedTarget,
 		});
 	}

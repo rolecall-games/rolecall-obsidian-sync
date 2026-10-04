@@ -5,7 +5,7 @@
 // vault: which folder a file is sent under, which files are refused, and —
 // the one that deletes things — which paths a push tells RoleCall to remove.
 
-import type { AttachmentEntry, NoteEntry, SyncRoot } from "./api";
+import type { AttachmentEntry, ManifestNote, NoteEntry, SyncRoot } from "./api";
 
 /** Wire path -> content hash, from the last successful sync. */
 export type SyncState = Record<string, string>;
@@ -171,8 +171,17 @@ export function foldersOverlap(a: string, b: string): boolean {
 /**
  * Turn "what the vault holds now" and "what we synced last time" into one
  * batch: only what changed, plus explicit deletes for what disappeared.
+ *
+ * `pulled` is the pull's own record (see `PullState`). It decides nothing
+ * about what is sent or deleted; it only supplies a `base_hash` for a note
+ * the push state has no entry for.
  */
-export function planPush(last: SyncState, snapshot: Snapshot, gm: GmFolderState): PushPlan {
+export function planPush(
+	last: SyncState,
+	snapshot: Snapshot,
+	gm: GmFolderState,
+	pulled: SyncState = {},
+): PushPlan {
 	// Current full state by wire path → hash (notes + attachments share the namespace).
 	const currentHashes: SyncState = {};
 	for (const n of snapshot.notes) currentHashes[n.path] = n.content_hash;
@@ -188,7 +197,13 @@ export function planPush(last: SyncState, snapshot: Snapshot, gm: GmFolderState)
 		}
 	}
 
-	const notes = snapshot.notes.filter((n) => last[n.path] !== n.content_hash);
+	// Each changed note says which version it was edited from, when we know.
+	const notes = snapshot.notes
+		.filter((n) => last[n.path] !== n.content_hash)
+		.map((n) => {
+			const base = last[n.path] ?? pulled[n.path];
+			return base === undefined ? n : { ...n, base_hash: base };
+		});
 	const attachments = snapshot.attachments.filter((a) => last[a.path] !== a.content_hash);
 	const deletedPaths = Object.keys(last).filter((p) => !(p in currentHashes));
 
@@ -207,4 +222,164 @@ export function planPush(last: SyncState, snapshot: Snapshot, gm: GmFolderState)
 		gmRemovals: gm === "off" ? lastGmPaths.length : 0,
 		isNoop: notes.length === 0 && attachments.length === 0 && deletedPaths.length === 0,
 	};
+}
+
+// ── Pull ────────────────────────────────────────────────────────────────────
+
+/**
+ * What the plugin remembers between syncs.
+ *
+ * - `synced` — the push state: wire path -> hash at the last sync, for every
+ *   path a push manages. A push deletes from RoleCall whatever is in here and
+ *   no longer in the vault.
+ * - `pulled` — GM notes a pull brought down while the GM folder was NOT being
+ *   pushed. They cannot go in `synced`: with the switch off, a push treats
+ *   every GM path there as one to remove from RoleCall. Kept apart, they are
+ *   only ever a "which version did I last see" record.
+ */
+export interface PullState {
+	synced: SyncState;
+	pulled: SyncState;
+}
+
+/** The version of `path` this vault last agreed with RoleCall on, if any. */
+export function baseHash(state: PullState, path: string): string | undefined {
+	return state.synced[path] ?? state.pulled[path];
+}
+
+/**
+ * Record that the vault and RoleCall agree on `hash` for `path` — in the push
+ * state when a push manages that path, in the pull's own record when it does
+ * not (a GM path while the GM folder is not pushed).
+ */
+export function recordAgreed(
+	state: PullState,
+	path: string,
+	hash: string,
+	gmPushed: boolean,
+): void {
+	if (!isGmWirePath(path) || gmPushed) {
+		state.synced[path] = hash;
+		delete state.pulled[path];
+	} else {
+		state.pulled[path] = hash;
+	}
+}
+
+/**
+ * Forget what was agreed for `path`, so the next push sends the file whole.
+ *
+ * Used for one case: the vault holds exactly RoleCall's version of a note
+ * that RoleCall still has a conflict parked on. Only a push can settle that —
+ * RoleCall clears a parked conflict when a vault shows it the app's own
+ * bytes — and a push sends nothing it believes is already synced.
+ */
+export function forgetAgreed(state: PullState, path: string): void {
+	delete state.synced[path];
+	delete state.pulled[path];
+}
+
+/**
+ * What a pull does about one path RoleCall holds.
+ *
+ * - `create`       — not in the vault and never synced: new on RoleCall.
+ * - `update`       — the vault's copy is the one we last synced; RoleCall's
+ *                    has changed since. Safe to replace.
+ * - `same`         — identical already.
+ * - `local-ahead`  — RoleCall's copy is the one we last synced; the vault's
+ *                    has changed. The next push sends it.
+ * - `deleted-here` — synced before and since deleted from the vault. Not
+ *                    resurrected; the next push tells RoleCall.
+ * - `conflict`     — changed on both sides, or different with no record of a
+ *                    common version, or RoleCall has a conflict parked on it.
+ *                    Never resolved automatically.
+ */
+export type PullAction =
+	| "create"
+	| "update"
+	| "same"
+	| "local-ahead"
+	| "deleted-here"
+	| "conflict";
+
+export function classifyPull(
+	remoteHash: string,
+	localHash: string | undefined,
+	base: string | undefined,
+	parked: boolean,
+): PullAction {
+	if (localHash === undefined) return base === undefined ? "create" : "deleted-here";
+	if (localHash === remoteHash) return "same";
+	if (parked) return "conflict";
+	if (base === localHash) return "update";
+	if (base === remoteHash) return "local-ahead";
+	return "conflict";
+}
+
+export interface PullPlan {
+	create: string[];
+	update: string[];
+	conflicts: string[];
+	/**
+	 * Identical on both sides, with the hash to record. `parked` — RoleCall
+	 * still has a conflict standing on it, which the next push should settle
+	 * (`forgetAgreed`).
+	 */
+	same: { path: string; hash: string; parked: boolean }[];
+}
+
+/** Sort RoleCall's entries of one kind into what a pull does with each. */
+export function planPull(
+	remote: Pick<ManifestNote, "path" | "content_hash" | "conflict">[],
+	local: SyncState,
+	state: PullState,
+): PullPlan {
+	const plan: PullPlan = { create: [], update: [], conflicts: [], same: [] };
+
+	for (const entry of remote) {
+		const action = classifyPull(
+			entry.content_hash,
+			local[entry.path],
+			baseHash(state, entry.path),
+			entry.conflict === true,
+		);
+		if (action === "create") plan.create.push(entry.path);
+		else if (action === "update") plan.update.push(entry.path);
+		else if (action === "conflict") plan.conflicts.push(entry.path);
+		else if (action === "same") {
+			plan.same.push({
+				path: entry.path,
+				hash: entry.content_hash,
+				parked: entry.conflict === true,
+			});
+		}
+	}
+
+	return plan;
+}
+
+/**
+ * Paths the vault still holds, and once synced, that RoleCall no longer has:
+ * deleted or moved there. A pull leaves these files alone — it only adds and
+ * updates — and says how many there are.
+ */
+export function goneFromRemote(
+	remotePaths: Iterable<string>,
+	local: SyncState,
+	state: PullState,
+): string[] {
+	const remote = new Set(remotePaths);
+	return Object.keys(local)
+		.filter((path) => !remote.has(path) && baseHash(state, path) !== undefined)
+		.sort();
+}
+
+/**
+ * Where a wire path lives in this vault: under the published folder, or the
+ * GM folder for a `GM/…` path. `null` for a GM path when no GM folder is set.
+ */
+export function localPathFor(wirePath: string, publishedPath: string, gmPath: string): string | null {
+	if (!isGmWirePath(wirePath)) return `${publishedPath}/${wirePath}`;
+	if (isVaultRoot(gmPath)) return null;
+	return `${gmPath}/${wirePath.slice(GM_WIRE_PREFIX.length)}`;
 }
