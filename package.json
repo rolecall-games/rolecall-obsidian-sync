@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-rolecall-sync",
-	"version": "0.3.0",
+	"version": "0.4.0",
 	"description": "Obsidian plugin that syncs your campaign notes with a RoleCall game: push Published/ (and GM/ if you turn it on), pull what was written on RoleCall.",
 	"homepage": "https://rolecall.games",
 	"main": "main.js",

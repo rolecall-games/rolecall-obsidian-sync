@@ -1,7 +1,7 @@
 {
 	"id": "rolecall-sync",
 	"name": "RoleCall Sync",
-	"version": "0.3.0",
+	"version": "0.4.0",
 	"minAppVersion": "1.5.7",
 	"description": "Publish your campaign notes to your RoleCall game and pull back what was written there. Published/ always syncs; GM/ is only sent if you turn it on, and then only GMs can ever read it.",
 	"author": "Framework and Fable",

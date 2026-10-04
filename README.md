@@ -154,8 +154,8 @@ each: **Keep mine** (your copy stands, and your next push makes it RoleCall's ve
 **Use RoleCall's** (your copy is replaced). Anything you don't decide is asked about again next
 time. Nothing is ever overwritten without that choice.
 
-**Pulling needs permission to read your campaign's notes**, which tokens from before 0.3.0 don't
-have — they could only push, on purpose. If a pull says the token can't pull, open
+**Pulling needs permission to read your campaign's notes**, which tokens issued before pulling
+existed (plugin 0.4.0) don't have — they could only push, on purpose. If a pull says the token can't pull, open
 **Settings → RoleCall Sync** and click **Connect** once; that grants it. (If you paste tokens by
 hand, tick the pull box when generating one on the **Plugins** page.)
 
