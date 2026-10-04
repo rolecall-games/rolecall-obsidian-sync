@@ -4,6 +4,7 @@
 // kept free of the `obsidian` import for exactly this reason.
 
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { describe, it } from "node:test";
 import type { AttachmentEntry, NoteEntry } from "../src/api";
 import {
@@ -25,7 +26,14 @@ import {
 	type PullState,
 	type Snapshot,
 } from "../src/plan";
-import { explainPullFailure, summarize, summarizePull, withHeldBack } from "../src/util";
+import {
+	explainPullFailure,
+	sha256Hex,
+	summarize,
+	summarizePull,
+	targetFingerprint,
+	withHeldBack,
+} from "../src/util";
 
 const note = (path: string, hash: string): NoteEntry => ({
 	path,
@@ -573,5 +581,40 @@ describe("the end-of-pull notice", () => {
 		assert.match(explainPullFailure({ status: 403 }), /can push notes but not pull them/);
 		assert.match(explainPullFailure({ status: 404 }), /doesn't support pulling/);
 		assert.match(explainPullFailure({ status: 401 }), /Invalid or revoked token/);
+	});
+});
+
+describe("hashing", () => {
+	const reference = (data: Uint8Array | string) => createHash("sha256").update(data).digest("hex");
+
+	it("sha256Hex matches a reference implementation, leading zeros included", async () => {
+		// Every byte value appears in some digest below, so a nibble dropped
+		// from a byte under 0x10 would shorten at least one of these.
+		for (const text of ["", "a", "RoleCall", "the quick brown fox", "\u0000\u0001\u0002"]) {
+			const bytes = new TextEncoder().encode(text);
+			const hex = await sha256Hex(bytes);
+			assert.equal(hex, reference(bytes));
+			assert.equal(hex.length, 64);
+			assert.match(hex, /^[0-9a-f]{64}$/);
+		}
+	});
+
+	it("pads each byte to two digits", async () => {
+		// sha256("abc") starts ba7816bf… and contains bytes below 0x10.
+		const hex = await sha256Hex(new TextEncoder().encode("abc"));
+		assert.equal(hex, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+	});
+
+	it("the sync-target fingerprint is the NUL-joined target, unchanged from earlier releases", async () => {
+		// Every install stores this value. If the separator or the trimming
+		// ever changed, each one would see "sync target changed" on its next
+		// push and re-send its whole vault.
+		const fingerprint = await targetFingerprint({
+			apiBaseUrl: " https://rolecall.games// ",
+			apiToken: " rc_token ",
+			publishedFolder: " Published ",
+		});
+
+		assert.equal(fingerprint, reference("https://rolecall.games\u0000rc_token\u0000Published"));
 	});
 });
