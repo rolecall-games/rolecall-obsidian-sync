@@ -4,21 +4,54 @@ An Obsidian community plugin that syncs your TTRPG campaign notes to a [RoleCall
 
 > **Requires a free [https://rolecall.games](https://rolecall.games) account.** The plugin pushes notes to a game you run there, authenticated by a per-game API token from that game's **Plugins** page (see [Configure](#configure)).
 
-## The one rule: `Published/` syncs, everything else stays private
+## The one rule: `Published/` is for your players, `GM/` is for you
 
-This plugin uploads **only** the notes inside your `Published/` folder (configurable). Your `GM/`
-notes — secrets, plans, spoilers — are never sent. The RoleCall server also enforces this: it
-rejects any path outside the published root, so GM content can't reach it even by accident.
+Two folders, and which one a note is in is the only thing that decides who can read it:
+
+| Folder       | Sent to RoleCall?                                         | Who can read it there        |
+| ------------ | --------------------------------------------------------- | ---------------------------- |
+| `Published/` | Always.                                                   | Your players (or the public, if you made the campaign's notes public). |
+| `GM/`        | **Only if you turn on _Also push my GM folder_.** Off by default. | GMs of the campaign. Nobody else, ever. |
+| anything else | Never — with one exception: **an image a synced note embeds.** | Whoever can read the note that embeds it. |
+
+Both folder names are configurable.
+
+**Images don't need a folder.** If a note in `Published/` embeds an image (`![[map.png]]`), the
+image is uploaded with it wherever it lives in your vault — the vault root, an attachments folder,
+anywhere — because your players are already meant to see it in that note. If only GM notes embed
+it, it is uploaded GM-only, and only when the GM folder is switched on. Nothing else outside the two
+folders is ever read: not notes, not images no synced note embeds.
+
+The one place this never reaches is your GM folder. An image stored there is not published by
+embedding it in a published note — with the GM folder off it never leaves this device, and with it
+on it syncs GM-only. Move the image out of `GM/` if your players should see it.
+
+**With the GM folder off** (the default), nothing under it is read, let alone sent — your secrets,
+plans and spoilers stay on this device, exactly as in every earlier version of this plugin.
+
+**With it on**, your GM notes sync to the GM side of your campaign's notes workspace on RoleCall, so
+your prep is there when you run the game. Players never see a GM note: not in the notes list, not in
+search, not in the activity feed — and a `[[link]]` from a published note to a GM note shows up for
+them as plain text, not even as a link. This is enforced by the RoleCall server, not by this plugin:
+the server files anything under `GM/` as GM-only and re-checks every path itself.
+
+**Turning it off again removes those notes from RoleCall** on your next push. (A GM note you went on
+to edit on RoleCall is kept there and flagged for you to decide, rather than deleted.)
 
 > Don't rely on `%%comments%%` or `> [!secret]` callouts to hide things inside a published note —
 > they are **not** hidden. If it shouldn't be seen, keep it in `GM/`.
 
+> A folder named `GM` *inside* `Published/` is never sent — it would be indistinguishable from your
+> real GM folder. The plugin tells you when it holds files back for this reason; rename the folder.
+
 ## What it does
 
-- Adds a **Push published notes** ribbon icon (cloud-with-arrow) and a command-palette action.
+- Adds a **Push notes to RoleCall** ribbon icon (cloud-with-arrow) and a command-palette action.
 - On trigger, sends an **incremental** JSON batch of changed notes + embedded media to RoleCall,
   and deletes notes you've removed. Unchanged files are skipped (it remembers the last sync).
-- Markdown notes become pages; media in `Published/` becomes embeddable images.
+- Markdown notes become pages; media in a synced folder, or embedded by a synced note, becomes
+  images on those pages. Stop embedding an image from outside the folders and the next push removes
+  it from RoleCall.
 
 ## What it does *not* do (yet)
 
@@ -61,7 +94,9 @@ Prefer to wire it by hand? Open **Settings → RoleCall Sync** and fill in:
 | ---------------- | --------------------------------------------------------------------------- |
 | API base URL     | `https://rolecall.games` (default). Change only if you self-host RoleCall. |
 | API token        | A personal token. See **How to generate a token** below.                    |
-| Published folder | `Published` (default). Only notes inside this folder are synced.            |
+| Published folder | `Published` (default). Notes inside this folder are synced and shown to your players. |
+| Also push my GM folder | Off (default). Turn on to sync your GM folder too — GMs only, see [the one rule](#the-one-rule-published-is-for-your-players-gm-is-for-you). Turning it off removes those notes from RoleCall on the next push. |
+| GM folder        | `GM` (default). Only read when the switch above is on. Must not be inside the published folder. |
 
 The token identifies which game receives the push — there's no separate Game ID setting. If you want to push to a different game, generate a token on that game's page and paste it here.
 
@@ -79,11 +114,17 @@ baked in) — just install the plugin and push.
 ## Push
 
 - Click the cloud-with-arrow ribbon icon, **or**
-- Open the command palette (`Cmd/Ctrl+P`) and run **RoleCall Sync: Push published notes**.
+- Open the command palette (`Cmd/Ctrl+P`) and run **RoleCall Sync: Push notes to RoleCall**
+  (named **Push published notes** before 0.3.0).
 
-You'll see `Syncing published notes…` while it runs and a summary like `Synced: 3 added, 1 updated`
-on success (or `Already up to date`). On failure, the notice explains what went wrong (bad token,
-out-of-date plugin, network).
+You'll see `Syncing published notes…` while it runs — or `Syncing published and GM notes…` when the
+GM folder is on, so every push says what it is carrying — and a summary like
+`Synced: 3 added, 1 updated` on success (or `Already up to date`). On failure, the notice explains
+what went wrong (bad token, out-of-date plugin, network).
+
+If the GM folder is switched on but can't be found (renamed, or a typo in the setting), the push
+carries your published notes only and leaves the GM notes already on RoleCall untouched — a folder
+the plugin can't find is never treated as "delete them all".
 
 ## Local development
 
@@ -102,14 +143,19 @@ ln -s "$PWD" "/path/to/TestVault/.obsidian/plugins/rolecall-sync"
 
 Install the [Hot Reload](https://github.com/pjeby/hot-reload) plugin in the test vault so changes to `main.js` reload automatically.
 
-Production build:
+Production build, tests and lint:
 
 ```bash
 npm run build
+npm test       # the push-planning rules in src/plan.ts — no Obsidian runtime needed
+npm run lint
 ```
 
 ## Releasing
 
+0. **If the release raises `SYNC_VERSION` (`src/api.ts`), the RoleCall server must already be
+   deployed with it.** A plugin that speaks a newer version than the server gets a `409` on every
+   push until the server catches up, and updating the plugin again cannot fix it.
 1. Bump `version` in `manifest.json` and add a matching entry in `versions.json` mapping the new version to the minimum supported Obsidian version.
 2. Tag the release on GitHub with the exact version (no leading `v`), e.g. `0.1.1`.
 3. Attach `manifest.json` and `main.js` as individual release assets.

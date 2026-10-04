@@ -207,8 +207,14 @@ class ConnectModal extends Modal {
 		contentEl.empty();
 
 		contentEl.createEl("h2", { text: "Connected" });
+		// Says what the push will carry, both folders if the GM switched the
+		// second one on before connecting: this is the consent step.
+		const { publishedFolder, syncGmFolder, gmFolder } = this.plugin.settings;
+		const question = syncGmFolder
+			? `Push your ${publishedFolder}/ folder to publish it there, and your ${gmFolder}/ folder for GMs only?`
+			: `Push your ${publishedFolder}/ folder to publish it there?`;
 		contentEl.createEl("p", {
-			text: `This vault is now linked to “${gameName}”. Push your ${this.plugin.settings.publishedFolder}/ folder to publish it there?`,
+			text: `This vault is now linked to “${gameName}”. ${question}`,
 		});
 
 		const row = contentEl.createDiv({ cls: "modal-button-container" });

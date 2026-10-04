@@ -1,7 +1,8 @@
 import { Notice, Plugin } from "obsidian";
 import { startConnectFlow } from "./connect";
+import type { SyncState } from "./plan";
 import { DEFAULT_SETTINGS, RoleCallSettingTab, RoleCallSyncSettings } from "./settings";
-import { SyncEngine, SyncState } from "./sync";
+import { SyncEngine } from "./sync";
 import { targetFingerprint } from "./util";
 
 /**
@@ -11,15 +12,16 @@ import { targetFingerprint } from "./util";
 export default class RoleCallSyncPlugin extends Plugin {
 	settings: RoleCallSyncSettings = DEFAULT_SETTINGS;
 
-	// Root-relative published path -> content hash, from the last successful
-	// sync. Lets us send only what changed and emit explicit deletes.
+	// Wire path -> content hash, from the last successful sync: published
+	// files root-relative, GM-folder files under `GM/`. Lets us send only what
+	// changed and emit explicit deletes.
 	private lastSyncedHashes: SyncState = {};
 
 	// Which server/game/folder `lastSyncedHashes` was built against. See
 	// `targetFingerprint`; a mismatch invalidates the whole state.
 	private syncedTarget: string | null = null;
 
-	// One push at a time. Both the command and the ribbon call pushPublished,
+	// One push at a time. Both the command and the ribbon call pushNotes,
 	// and two overlapping runs each write the state on completion — the slower
 	// response can overwrite newer state with an older hash set, marking a
 	// changed note as synced forever.
@@ -28,22 +30,27 @@ export default class RoleCallSyncPlugin extends Plugin {
 	async onload() {
 		await this.loadSettings();
 
+		// The id predates the GM folder switch and stays as it is: Obsidian
+		// keys a user's hotkey to it, so renaming it would silently unbind
+		// every one. The label is what changed — a push may now carry both
+		// folders, and a label that says "published" would be wrong about the
+		// one thing a GM most needs it to be right about.
 		this.addCommand({
 			id: "push-published",
-			name: "Push published notes",
+			name: "Push notes to RoleCall",
 			callback: () => {
-				void this.pushPublished();
+				void this.pushNotes();
 			},
 		});
 
-		this.addRibbonIcon("upload-cloud", "Push published notes", () => {
-			void this.pushPublished();
+		this.addRibbonIcon("upload-cloud", "Push notes to RoleCall", () => {
+			void this.pushNotes();
 		});
 
 		this.addSettingTab(new RoleCallSettingTab(this.app, this));
 	}
 
-	async pushPublished(): Promise<void> {
+	async pushNotes(): Promise<void> {
 		if (this.syncing) {
 			new Notice("A sync is already running");
 			return;
@@ -53,7 +60,7 @@ export default class RoleCallSyncPlugin extends Plugin {
 		// dead-end "paste a token" notice; its success screen offers the push
 		// this click was asking for.
 		if (!this.settings.apiToken.trim()) {
-			startConnectFlow(this, { onConnected: () => void this.pushPublished() });
+			startConnectFlow(this, { onConnected: () => void this.pushNotes() });
 			return;
 		}
 
@@ -95,6 +102,10 @@ export default class RoleCallSyncPlugin extends Plugin {
 			apiBaseUrl: stored?.apiBaseUrl ?? DEFAULT_SETTINGS.apiBaseUrl,
 			apiToken: stored?.apiToken ?? DEFAULT_SETTINGS.apiToken,
 			publishedFolder: stored?.publishedFolder ?? DEFAULT_SETTINGS.publishedFolder,
+			// Strictly `true`: this is the switch that sends GM notes, and
+			// nothing but the GM flipping it may read as on.
+			syncGmFolder: stored?.syncGmFolder === true,
+			gmFolder: stored?.gmFolder ?? DEFAULT_SETTINGS.gmFolder,
 		};
 		this.lastSyncedHashes = stored?.lastSyncedHashes ?? {};
 		// null (not undefined) when upgrading from a build that never wrote one:

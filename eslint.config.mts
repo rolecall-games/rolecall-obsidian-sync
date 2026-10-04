@@ -44,6 +44,9 @@ export default tseslint.config(
 						"rolecall.games",
 						"RoleCall",
 						"RoleCall Sync",
+						// The folder and the role. Lowercased to "gm folder" it
+						// stops matching the folder's name in the vault.
+						"GM",
 						"Obsidian",
 						"Obsidian Sync",
 						"Obsidian Publish",
@@ -72,6 +75,14 @@ export default tseslint.config(
 		// minAppVersion moves to 1.13.0.
 		files: ["src/settings.ts"],
 		rules: { "@typescript-eslint/no-deprecated": "off" },
+	},
+	{
+		// Tests run under Node (`npm test`) and are never bundled — esbuild's
+		// only entry point is src/main.ts — so the rule that keeps Node
+		// built-ins out of a plugin that ships to mobile has nothing to say
+		// about them.
+		files: ["test/**/*.ts"],
+		rules: { "obsidianmd/no-nodejs-modules": "off" },
 	},
 	globalIgnores([
 		"node_modules",

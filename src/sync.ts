@@ -1,5 +1,6 @@
 import {
 	App,
+	getLinkpath,
 	normalizePath,
 	Notice,
 	requestUrl,
@@ -8,21 +9,31 @@ import {
 	TFolder,
 } from "obsidian";
 import {
-	AttachmentEntry,
 	CLIENT_NAME,
 	MEDIA_EXTENSIONS,
-	NoteEntry,
 	RejectedPath,
 	SYNC_VERSION,
 	SyncPayload,
 	SyncResponse,
+	SyncRoot,
 	VAULT_IMPORTS_PATH,
+	VersionMismatch,
 } from "./api";
+import {
+	claimsGmRoot,
+	foldersOverlap,
+	GmFolderState,
+	gmWirePath,
+	isInsideFolder,
+	isVaultRoot,
+	LooseEmbed,
+	placeLooseMedia,
+	planPush,
+	Snapshot,
+	SyncState,
+} from "./plan";
 import type { RoleCallSyncSettings } from "./settings";
-import { parseJson, sha256Hex, summarize, toBase64 } from "./util";
-
-/** Root-relative published path -> content hash, from the last successful sync. */
-export type SyncState = Record<string, string>;
+import { parseJson, sha256Hex, summarize, toBase64, withHeldBack } from "./util";
 
 /**
  * The configured published folder does not exist in this vault.
@@ -40,13 +51,41 @@ export class MissingFolderError extends Error {
 }
 
 /**
- * One push of the published folder to a RoleCall game.
+ * The published folder and the GM folder are the same folder, or one is inside
+ * the other. Every file in the overlap would be read by both walks — and the
+ * published walk sends what it finds to the players. There is no reading of
+ * such a setup that is safe to guess at, so nothing is sent.
+ */
+export class OverlappingFoldersError extends Error {
+	constructor(
+		readonly publishedPath: string,
+		readonly gmPath: string,
+	) {
+		super(`Published folder (${publishedPath}) and GM folder (${gmPath}) overlap`);
+		this.name = "OverlappingFoldersError";
+	}
+}
+
+interface Collected {
+	snapshot: Snapshot;
+	gm: GmFolderState;
+	/** The GM folder as configured, for the "not found" notice. */
+	gmFolderPath: string;
+	/** Published files held back because they sit in a folder named GM. */
+	shadowed: number;
+}
+
+/**
+ * One push of a vault's notes to a RoleCall game: the published folder always,
+ * the GM folder only when the GM has switched it on, and with each note the
+ * images it embeds — wherever in the vault they live, the GM folder excepted.
  *
- * The engine owns collection, diffing and the request; the plugin owns the
- * persisted state and hands it in. Keeping the two apart is what makes the
- * collector testable without an Obsidian runtime — the privacy promise
- * ("only the published folder ever leaves the machine") lives in
- * `collectPublished` and deserves a test that does not need a real vault.
+ * The engine owns collection and the request; the plugin owns the persisted
+ * state and hands it in; `plan.ts` owns every decision that can be made
+ * without a vault. The privacy promises live in two places and each has its
+ * own test: which folder a file is sent under and which files are refused
+ * (`collect` below, by way of `plan.ts`), and what RoleCall does with a
+ * `GM/…` path (the server — the plugin's word is never taken for it).
  */
 export class SyncEngine {
 	constructor(
@@ -70,45 +109,58 @@ export class SyncEngine {
 			return null;
 		}
 
-		new Notice("Syncing published notes…");
+		new Notice(
+			this.settings.syncGmFolder
+				? "Syncing published and GM notes…"
+				: "Syncing published notes…",
+		);
 
-		let snapshot: { notes: NoteEntry[]; attachments: AttachmentEntry[] };
+		let collected: Collected;
 		try {
-			snapshot = await this.collectPublished();
+			collected = await this.collect();
 		} catch (err) {
 			if (err instanceof MissingFolderError) {
 				new Notice(`Published folder not found: ${err.folderPath}`);
 				return null;
 			}
-			console.error("RoleCall Sync: failed to read published notes", err);
-			new Notice("Couldn't read the published notes folder");
+			if (err instanceof OverlappingFoldersError) {
+				new Notice(
+					"Your published folder and GM folder overlap, so nothing was sent — point them at two separate folders in the plugin settings",
+				);
+				return null;
+			}
+			console.error("RoleCall Sync: failed to read the vault's notes", err);
+			new Notice("Couldn't read the notes to sync");
 			return null;
 		}
 
-		// Current full state by path → hash (notes + attachments share the namespace).
-		const currentHashes: SyncState = {};
-		for (const n of snapshot.notes) currentHashes[n.path] = n.content_hash;
-		for (const a of snapshot.attachments) currentHashes[a.path] = a.content_hash;
+		if (collected.gm === "missing") {
+			new Notice(
+				`GM folder not found: ${collected.gmFolderPath} — syncing published notes only, and leaving the GM notes already on RoleCall as they are`,
+			);
+		}
 
-		// Only send what changed; delete what disappeared.
-		const changedNotes = snapshot.notes.filter((n) => lastSyncedHashes[n.path] !== n.content_hash);
-		const changedAttachments = snapshot.attachments.filter(
-			(a) => lastSyncedHashes[a.path] !== a.content_hash,
-		);
-		const deletedPaths = Object.keys(lastSyncedHashes).filter((p) => !(p in currentHashes));
+		const plan = planPush(lastSyncedHashes, collected.snapshot, collected.gm);
 
-		if (changedNotes.length === 0 && changedAttachments.length === 0 && deletedPaths.length === 0) {
-			new Notice("Already up to date");
+		if (plan.isNoop) {
+			new Notice(withHeldBack("Already up to date", collected.shadowed));
 			return null;
+		}
+
+		if (plan.gmRemovals > 0) {
+			new Notice(
+				`GM folder sync is off — removing ${plan.gmRemovals} GM ${plan.gmRemovals === 1 ? "file" : "files"} from RoleCall`,
+			);
 		}
 
 		const payload: SyncPayload = {
 			sync_version: SYNC_VERSION,
 			client: CLIENT_NAME,
 			client_version: this.clientVersion,
-			notes: changedNotes,
-			attachments: changedAttachments,
-			deleted_paths: deletedPaths,
+			roots: plan.roots,
+			notes: plan.notes,
+			attachments: plan.attachments,
+			deleted_paths: plan.deletedPaths,
 		};
 
 		let response: RequestUrlResponse;
@@ -130,12 +182,13 @@ export class SyncEngine {
 			return null;
 		}
 
-		return this.handleResponse(response, currentHashes);
+		return this.handleResponse(response, plan.currentHashes, collected.shadowed);
 	}
 
 	private handleResponse(
 		response: RequestUrlResponse,
 		currentHashes: SyncState,
+		shadowed: number,
 	): SyncState | null {
 		const status = response.status;
 
@@ -152,7 +205,7 @@ export class SyncEngine {
 				if (hash !== undefined && !rejectedPaths.has(path)) next[path] = hash;
 			}
 
-			new Notice(summarize(body, rejected.length));
+			new Notice(summarize(body, rejected.length, shadowed));
 			if (rejected.length > 0) {
 				console.warn("RoleCall Sync: server rejected paths", rejected);
 			}
@@ -164,7 +217,16 @@ export class SyncEngine {
 			return null;
 		}
 		if (status === 409) {
-			new Notice("This plugin version is out of date — please update it and sync again");
+			// Outside the server's accepted range — in one of two directions,
+			// and only one of them is fixed by updating the plugin.
+			const serverVersion = parseJson<VersionMismatch>(response)?.sync_version;
+			if (typeof serverVersion === "number" && serverVersion < SYNC_VERSION) {
+				new Notice(
+					"This server doesn't support this plugin version yet — nothing was sent, so try again later",
+				);
+			} else {
+				new Notice("This plugin version is out of date — please update it and sync again");
+			}
 			return null;
 		}
 		if (status === 413) {
@@ -179,50 +241,173 @@ export class SyncEngine {
 		return null;
 	}
 
-	// Gather markdown notes and media attachments under the published folder,
-	// keyed by their path RELATIVE to that folder (the server re-validates anyway).
+	// Gather markdown notes and media attachments from the published folder —
+	// and, when the GM has switched it on, the GM folder — keyed by the path
+	// RoleCall stores them under (the server re-validates every one anyway).
+	// Then the media those notes embed from anywhere else in the vault.
 	//
-	// Walks the resolved folder rather than filtering every file in the vault by
-	// a string prefix: `getFolderByPath` is the API Obsidian's guidelines point
-	// at, and it makes a missing folder an error instead of an empty match. The
-	// prefix approach also silently included a sibling like `PublishedDrafts/`
-	// under a `Published` setting, which is the one mistake this plugin must
-	// never make.
-	private async collectPublished(): Promise<{
-		notes: NoteEntry[];
-		attachments: AttachmentEntry[];
-	}> {
-		const folderPath = normalizePath(this.settings.publishedFolder.trim());
-		const root = this.app.vault.getFolderByPath(folderPath);
-		if (!root) throw new MissingFolderError(folderPath);
+	// Walks the resolved folders rather than filtering every file in the vault
+	// by a string prefix: `getFolderByPath` is the API Obsidian's guidelines
+	// point at, and it makes a missing folder an error instead of an empty
+	// match. The prefix approach also silently included a sibling like
+	// `PublishedDrafts/` under a `Published` setting, which is the one mistake
+	// this plugin must never make.
+	private async collect(): Promise<Collected> {
+		const publishedPath = normalizePath(this.settings.publishedFolder.trim());
 
-		const notes: NoteEntry[] = [];
-		const attachments: AttachmentEntry[] = [];
+		// An empty setting normalises to the vault root, and walking that would
+		// send every note in the vault to the players.
+		if (isVaultRoot(publishedPath)) throw new MissingFolderError("(not set)");
+
+		const gmWanted = this.settings.syncGmFolder;
+		const gmPath = gmWanted ? normalizePath(this.settings.gmFolder.trim()) : "";
+
+		// Decided before a single file is read.
+		if (gmWanted && !isVaultRoot(gmPath) && foldersOverlap(publishedPath, gmPath)) {
+			throw new OverlappingFoldersError(publishedPath, gmPath);
+		}
+
+		const publishedRoot = this.app.vault.getFolderByPath(publishedPath);
+		if (!publishedRoot) throw new MissingFolderError(publishedPath);
+
+		const snapshot: Snapshot = { notes: [], attachments: [] };
+
+		// Media a synced note embeds from OUTSIDE both folders. Never from the
+		// GM folder, whether or not it is switched on: with it on the walk
+		// below already sends the file (GM-only), and with it off nothing
+		// under that folder leaves the vault — embedding a GM image in a
+		// published note does not publish it. The folder is the boundary.
+		const gmBoundary = normalizePath(this.settings.gmFolder.trim());
+		const loose: LooseEmbed[] = [];
+		const noteEmbeds = (embeddedBy: SyncRoot) => (note: TFile) => {
+			for (const file of this.embeddedMedia(note)) {
+				if (isInsideFolder(file.path, publishedPath)) continue;
+				if (!isVaultRoot(gmBoundary) && isInsideFolder(file.path, gmBoundary)) continue;
+				loose.push({ vaultPath: file.path, embeddedBy });
+			}
+		};
+
+		// Published files go out root-relative — except any in a folder named
+		// GM, whose root-relative path is spelled like a GM-root one.
+		const shadowed = await this.read(
+			publishedRoot,
+			(rel) => (claimsGmRoot(rel) ? null : rel),
+			snapshot,
+			noteEmbeds("published"),
+		);
+
+		let gm: GmFolderState = "off";
+		if (gmWanted) {
+			// Unlike the published folder, a GM folder we cannot find is not
+			// fatal: it cannot leave a campaign site blank. It is not "off"
+			// either — see `GmFolderState`.
+			const gmRoot = isVaultRoot(gmPath) ? null : this.app.vault.getFolderByPath(gmPath);
+			if (gmRoot) {
+				await this.read(gmRoot, gmWirePath, snapshot, noteEmbeds("gm"));
+				gm = "synced";
+			} else {
+				gm = "missing";
+			}
+		}
+
+		await this.readLooseMedia(loose, snapshot);
+
+		return {
+			snapshot,
+			gm,
+			gmFolderPath: isVaultRoot(gmPath) ? "(not set)" : gmPath,
+			shadowed,
+		};
+	}
+
+	// The media files `note` embeds, as Obsidian itself resolves them — the
+	// same lookup that decides which image the GM sees in the note. Only
+	// media: an embedded NOTE from outside the synced folders is not sent.
+	private embeddedMedia(note: TFile): TFile[] {
+		const embeds = this.app.metadataCache.getFileCache(note)?.embeds ?? [];
+		const out: TFile[] = [];
+		for (const embed of embeds) {
+			const dest = this.app.metadataCache.getFirstLinkpathDest(
+				getLinkpath(embed.link),
+				note.path,
+			);
+			if (dest && MEDIA_EXTENSIONS.has(dest.extension.toLowerCase())) out.push(dest);
+		}
+		return out;
+	}
+
+	// Read the loose media the synced notes embed into `into`, at the paths
+	// `placeLooseMedia` gives them.
+	private async readLooseMedia(loose: LooseEmbed[], into: Snapshot): Promise<void> {
+		if (loose.length === 0) return;
+
+		const taken = [...into.notes, ...into.attachments].map((entry) => entry.path);
+		const { placed, skipped } = placeLooseMedia(loose, taken);
+
+		for (const { vaultPath, wirePath } of placed) {
+			const file = this.app.vault.getFileByPath(vaultPath);
+			if (!file) continue;
+			const buf = new Uint8Array(await this.app.vault.readBinary(file));
+			into.attachments.push({
+				path: wirePath,
+				content_base64: toBase64(buf),
+				content_hash: await sha256Hex(buf),
+			});
+		}
+
+		if (skipped.length > 0) {
+			console.warn(
+				"RoleCall Sync: embedded files not sent — another file with the same name is already being synced",
+				skipped,
+			);
+		}
+	}
+
+	// Read every syncable file under `root` into `into`, at the wire path
+	// `toWirePath` gives its root-relative path. A `null` wire path holds the
+	// file back — it is not read — and the count of those is returned.
+	// `onNote` sees each note that was read.
+	private async read(
+		root: TFolder,
+		toWirePath: (rel: string) => string | null,
+		into: Snapshot,
+		onNote: (note: TFile) => void,
+	): Promise<number> {
 		const prefixLength = root.path.length + 1;
+		let heldBack = 0;
 
 		for (const file of collectFiles(root)) {
-			const rel = file.path.slice(prefixLength);
 			const ext = file.extension.toLowerCase();
+			const isNote = ext === "md";
 
-			if (ext === "md") {
+			// Other file types under a synced folder are intentionally not synced.
+			if (!isNote && !MEDIA_EXTENSIONS.has(ext)) continue;
+
+			const path = toWirePath(file.path.slice(prefixLength));
+			if (path === null) {
+				heldBack += 1;
+				continue;
+			}
+
+			if (isNote) {
 				const markdown = await this.app.vault.read(file);
-				notes.push({
-					path: rel,
+				into.notes.push({
+					path,
 					markdown,
 					content_hash: await sha256Hex(new TextEncoder().encode(markdown)),
 				});
-			} else if (MEDIA_EXTENSIONS.has(ext)) {
+				onNote(file);
+			} else {
 				const buf = new Uint8Array(await this.app.vault.readBinary(file));
-				attachments.push({
-					path: rel,
+				into.attachments.push({
+					path,
 					content_base64: toBase64(buf),
 					content_hash: await sha256Hex(buf),
 				});
 			}
-			// Other file types under the published folder are intentionally not synced.
 		}
 
-		return { notes, attachments };
+		return heldBack;
 	}
 }
 

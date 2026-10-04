@@ -7,12 +7,18 @@ export interface RoleCallSyncSettings {
 	apiBaseUrl: string;
 	apiToken: string;
 	publishedFolder: string;
+	// Off unless the GM turns it on. While it is off, nothing under the GM
+	// folder is read, let alone sent.
+	syncGmFolder: boolean;
+	gmFolder: string;
 }
 
 export const DEFAULT_SETTINGS: RoleCallSyncSettings = {
 	apiBaseUrl: "https://rolecall.games",
 	apiToken: "",
 	publishedFolder: "Published",
+	syncGmFolder: false,
+	gmFolder: "GM",
 };
 
 // One row, described once. `getSettingDefinitions()` (Obsidian 1.13+) and the
@@ -90,7 +96,7 @@ export class RoleCallSettingTab extends PluginSettingTab {
 								startConnectFlow(this.plugin, {
 									onConnected: () => {
 										this.refresh();
-										void this.plugin.pushPublished();
+										void this.plugin.pushNotes();
 									},
 								});
 							}),
@@ -145,7 +151,7 @@ export class RoleCallSettingTab extends PluginSettingTab {
 			},
 			{
 				name: "Published folder",
-				desc: "Only notes inside this folder are synced. Everything else in the vault stays private.",
+				desc: "Notes inside this folder are synced and shown to your players, along with the images they embed. Everything else in the vault stays on this device, unless you turn on the GM folder below.",
 				build: (setting) => {
 					setting.addText((text) =>
 						text
@@ -159,8 +165,35 @@ export class RoleCallSettingTab extends PluginSettingTab {
 				},
 			},
 			{
+				name: "Also push my GM folder",
+				desc: "Off by default. When on, notes in your GM folder are sent to RoleCall too, where only GMs of the campaign can ever read them — players never see them, not even as a link. Turning this off removes them from RoleCall on your next push.",
+				build: (setting) => {
+					setting.addToggle((toggle) =>
+						toggle.setValue(this.plugin.settings.syncGmFolder).onChange(async (value) => {
+							this.plugin.settings.syncGmFolder = value;
+							await this.plugin.saveSettings();
+						}),
+					);
+				},
+			},
+			{
+				name: "GM folder",
+				desc: "The folder that holds your GM-only notes. Only read when the switch above is on, and it must not be inside your published folder.",
+				build: (setting) => {
+					setting.addText((text) =>
+						text
+							.setPlaceholder("GM")
+							.setValue(this.plugin.settings.gmFolder)
+							.onChange(async (value) => {
+								this.plugin.settings.gmFolder = value;
+								await this.plugin.saveSettings();
+							}),
+					);
+				},
+			},
+			{
 				name: "Resync from scratch",
-				desc: "Forget what was synced before and push the whole published folder on the next sync.",
+				desc: "Forget what was synced before and push everything again on the next sync. If you mean to stop syncing your GM folder, turn that off and push first — after a reset the plugin no longer knows which GM notes to remove.",
 				build: (setting) => {
 					setting.addButton((btn) =>
 						btn.setButtonText("Reset sync state").onClick(async () => {
