@@ -108,10 +108,7 @@ export class PullEngine {
 		const manifest = await this.fetchManifest();
 		if (!manifest) return null;
 
-		const state: PullState = {
-			synced: { ...current.synced },
-			pulled: { ...current.pulled },
-		};
+		const state = copyState(current);
 
 		const local: SyncState = {};
 		for (const n of collected.snapshot.notes) local[n.path] = n.content_hash;
@@ -178,7 +175,7 @@ export class PullEngine {
 	 * Returns the state to persist, or null if it could not be fetched.
 	 */
 	async takeRemote(conflict: PullConflict, current: PullState): Promise<PullState | null> {
-		const state: PullState = { synced: { ...current.synced }, pulled: { ...current.pulled } };
+		const state = copyState(current);
 		const tally: Tally = { added: 0, updated: 0, failed: 0 };
 		const at = new Map([[conflict.path, conflict.localPath]]);
 
@@ -206,8 +203,10 @@ export class PullEngine {
 	 * vault as ahead rather than in conflict.
 	 */
 	keepMine(conflict: PullConflict, current: PullState): PullState {
-		const state: PullState = { synced: { ...current.synced }, pulled: { ...current.pulled } };
+		const state = copyState(current);
 		recordAgreed(state, conflict.path, conflict.remoteHash, this.settings.syncGmFolder);
+		// The vault's file is the GM's choice now, stamp and all.
+		if (state.stamped) delete state.stamped[conflict.path];
 		return state;
 	}
 
@@ -314,6 +313,9 @@ export class PullEngine {
 				}
 
 				recordAgreed(state, entry.path, hash, this.settings.syncGmFolder);
+				// The file is RoleCall's version now; a stamp record no longer
+				// describes it.
+				if (state.stamped) delete state.stamped[entry.path];
 			} catch (err) {
 				console.error(`RoleCall Sync: couldn't write ${localPath}`, err);
 				tally.failed += 1;
@@ -410,6 +412,14 @@ export class PullEngine {
 	private token(): string {
 		return this.settings.apiToken.trim();
 	}
+}
+
+function copyState(current: PullState): PullState {
+	return {
+		synced: { ...current.synced },
+		pulled: { ...current.pulled },
+		stamped: { ...(current.stamped ?? {}) },
+	};
 }
 
 function parentOf(path: string): string {

@@ -75,10 +75,13 @@ export function withHeldBack(message: string, heldBack: number): string {
 	return `${message} — ${heldBack} not sent: a folder named GM inside your published folder (rename it, or move it to your GM folder)`;
 }
 
+// `entity` is what the push did with RoleCall's entity keys
+// (`describeEntityResults`), one sentence each.
 export function summarize(
 	body: SyncResponse | undefined,
 	rejectedCount: number,
 	heldBack = 0,
+	entity: string[] = [],
 ): string {
 	const n = body?.results?.notes;
 	const a = body?.results?.attachments;
@@ -92,6 +95,7 @@ export function summarize(
 	if (deleted) parts.push(`${deleted} deleted`);
 	let msg = parts.length ? `Synced: ${parts.join(", ")}` : "Synced";
 	if (rejectedCount > 0) msg += ` — ${rejectedCount} rejected (see console)`;
+	for (const sentence of entity) msg += ` — ${sentence}`;
 	return withHeldBack(msg, heldBack);
 }
 

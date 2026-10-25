@@ -1,7 +1,7 @@
 import { Notice, Plugin } from "obsidian";
 import { ConflictModal } from "./conflicts";
 import { startConnectFlow } from "./connect";
-import type { PullState, SyncState } from "./plan";
+import type { PullState, StampedState, SyncState } from "./plan";
 import { PullConflict, PullEngine } from "./pull";
 import { DEFAULT_SETTINGS, RoleCallSettingTab, RoleCallSyncSettings } from "./settings";
 import { SyncEngine } from "./sync";
@@ -23,6 +23,11 @@ export default class RoleCallSyncPlugin extends Plugin {
 	// GM notes a pull brought down while the GM folder was not being pushed.
 	// Kept out of `lastSyncedHashes` on purpose — see `PullState`.
 	private lastPulledHashes: SyncState = {};
+
+	// Files a push wrote an entity's `rc_id` into, until the next push sends
+	// them: lets a pull see "the agreed version plus the id" as the agreed
+	// version. See `effectiveLocalHash`.
+	private stampedHashes: StampedState = {};
 
 	// Which server/game/folder `lastSyncedHashes` was built against. See
 	// `targetFingerprint`; a mismatch invalidates the whole state.
@@ -93,9 +98,14 @@ export default class RoleCallSyncPlugin extends Plugin {
 			}
 
 			const engine = new SyncEngine(this.app, this.settings, this.manifest.version);
-			const next = await engine.push(this.lastSyncedHashes, this.lastPulledHashes);
+			const outcome = await engine.push(
+				this.lastSyncedHashes,
+				this.lastPulledHashes,
+				this.stampedHashes,
+			);
 
-			if (next) {
+			if (outcome) {
+				const next = outcome.synced;
 				// What this push told RoleCall to remove is no longer something
 				// the pull should remember agreeing on — or it would report every
 				// one of those files, on every pull, as "removed on RoleCall".
@@ -104,6 +114,7 @@ export default class RoleCallSyncPlugin extends Plugin {
 				}
 
 				this.lastSyncedHashes = next;
+				this.stampedHashes = outcome.stamped;
 				this.syncedTarget = fingerprint;
 				await this.persist();
 			}
@@ -176,12 +187,17 @@ export default class RoleCallSyncPlugin extends Plugin {
 	}
 
 	private pullState(): PullState {
-		return { synced: this.lastSyncedHashes, pulled: this.lastPulledHashes };
+		return {
+			synced: this.lastSyncedHashes,
+			pulled: this.lastPulledHashes,
+			stamped: this.stampedHashes,
+		};
 	}
 
 	private adopt(state: PullState): void {
 		this.lastSyncedHashes = state.synced;
 		this.lastPulledHashes = state.pulled;
+		if (state.stamped) this.stampedHashes = state.stamped;
 	}
 
 	// True when the state was built against a different target and has just
@@ -190,6 +206,7 @@ export default class RoleCallSyncPlugin extends Plugin {
 		if (this.syncedTarget === null || this.syncedTarget === fingerprint) return false;
 		this.lastSyncedHashes = {};
 		this.lastPulledHashes = {};
+		this.stampedHashes = {};
 		return true;
 	}
 
@@ -198,6 +215,7 @@ export default class RoleCallSyncPlugin extends Plugin {
 			| (Partial<RoleCallSyncSettings> & {
 					lastSyncedHashes?: SyncState;
 					lastPulledHashes?: SyncState;
+					stampedHashes?: StampedState;
 					syncedTarget?: string;
 			  })
 			| null;
@@ -212,6 +230,7 @@ export default class RoleCallSyncPlugin extends Plugin {
 		};
 		this.lastSyncedHashes = stored?.lastSyncedHashes ?? {};
 		this.lastPulledHashes = stored?.lastPulledHashes ?? {};
+		this.stampedHashes = stored?.stampedHashes ?? {};
 		// null (not undefined) when upgrading from a build that never wrote one:
 		// there is no target to compare against, so the first push is trusted
 		// rather than forced into a needless full re-send.
@@ -225,6 +244,7 @@ export default class RoleCallSyncPlugin extends Plugin {
 	async resetSyncState() {
 		this.lastSyncedHashes = {};
 		this.lastPulledHashes = {};
+		this.stampedHashes = {};
 		this.syncedTarget = null;
 		await this.persist();
 	}
@@ -234,6 +254,7 @@ export default class RoleCallSyncPlugin extends Plugin {
 			...this.settings,
 			lastSyncedHashes: this.lastSyncedHashes,
 			lastPulledHashes: this.lastPulledHashes,
+			stampedHashes: this.stampedHashes,
 			syncedTarget: this.syncedTarget,
 		});
 	}

@@ -14,9 +14,30 @@ import {
 	OverlappingFoldersError,
 	VaultCollector,
 } from "./collect";
-import { planPush, SyncState } from "./plan";
+import {
+	BoundEntry,
+	describeEntityResults,
+	EntityResults,
+	localTargets,
+	NormalisedEntry,
+	readEntityResults,
+	recordBound,
+	settleStamped,
+	shouldReplaceNormalised,
+	stampTargets,
+} from "./entities";
+import { planPush, PushPlan, StampedState, SyncState } from "./plan";
 import type { RoleCallSyncSettings } from "./settings";
-import { parseJson, summarize, withHeldBack } from "./util";
+import { stampRcId } from "./stamp";
+import { parseJson, sha256Hex, summarize, withHeldBack } from "./util";
+
+/** What a successful push leaves to persist. */
+export interface PushOutcome {
+	synced: SyncState;
+	stamped: StampedState;
+}
+
+const hashText = (text: string): Promise<string> => sha256Hex(new TextEncoder().encode(text));
 
 /**
  * One push of a vault's notes to a RoleCall game: the published folder always,
@@ -46,9 +67,14 @@ export class SyncEngine {
 	 *
 	 * `pulledHashes` is the pull's record of GM notes it brought down while
 	 * the GM folder was not being pushed. It is read here only to say which
-	 * version a changed note was edited from — see `planPush`.
+	 * version a changed note was edited from — see `planPush`. `stamped` is
+	 * the record of files the last push wrote an `rc_id` into (`entities.ts`).
 	 */
-	async push(lastSyncedHashes: SyncState, pulledHashes: SyncState = {}): Promise<SyncState | null> {
+	async push(
+		lastSyncedHashes: SyncState,
+		pulledHashes: SyncState = {},
+		stamped: StampedState = {},
+	): Promise<PushOutcome | null> {
 		const baseUrl = this.settings.apiBaseUrl.trim().replace(/\/+$/, "");
 		const token = this.settings.apiToken.trim();
 
@@ -132,14 +158,15 @@ export class SyncEngine {
 			return null;
 		}
 
-		return this.handleResponse(response, plan.currentHashes, collected.shadowed);
+		return this.handleResponse(response, plan, collected, stamped);
 	}
 
-	private handleResponse(
+	private async handleResponse(
 		response: RequestUrlResponse,
-		currentHashes: SyncState,
-		shadowed: number,
-	): SyncState | null {
+		plan: PushPlan,
+		collected: Collected,
+		previouslyStamped: StampedState,
+	): Promise<PushOutcome | null> {
 		const status = response.status;
 
 		if (status >= 200 && status < 300) {
@@ -150,16 +177,43 @@ export class SyncEngine {
 			// Record everything currently present as synced, except anything the
 			// server rejected (so it is retried next push).
 			const next: SyncState = {};
-			for (const path of Object.keys(currentHashes)) {
-				const hash = currentHashes[path];
+			for (const path of Object.keys(plan.currentHashes)) {
+				const hash = plan.currentHashes[path];
 				if (hash !== undefined && !rejectedPaths.has(path)) next[path] = hash;
 			}
 
-			new Notice(summarize(body, rejected.length, shadowed));
+			const sent = plan.notes.map((n) => n.path).filter((path) => !rejectedPaths.has(path));
+			const stamped = settleStamped(previouslyStamped, sent, next);
+
+			const entity = readEntityResults(body?.results);
+			const tagged = await this.stampBound(
+				entity.bound,
+				collected,
+				plan,
+				rejectedPaths,
+				next,
+				stamped,
+			);
+			await this.applyNormalised(entity.normalised, collected, plan, rejectedPaths, next);
+			logEntityResults(entity);
+
+			const sentences = describeEntityResults({
+				tagged,
+				notesKept: entity.notesKept.length,
+				attachmentsKept: entity.attachmentsKept.length,
+				duplicates: entity.duplicateIds.length,
+				normalised: entity.normalised.length,
+			});
+			// Longer on screen when it says something about entities: those
+			// sentences ask the GM to do something in RoleCall.
+			new Notice(
+				summarize(body, rejected.length, collected.shadowed, sentences),
+				sentences.length > 0 ? 12000 : undefined,
+			);
 			if (rejected.length > 0) {
 				console.warn("RoleCall Sync: server rejected paths", rejected);
 			}
-			return next;
+			return { synced: next, stamped };
 		}
 
 		if (status === 401) {
@@ -189,5 +243,132 @@ export class SyncEngine {
 		}
 		new Notice(`Sync failed: HTTP ${status}`);
 		return null;
+	}
+	/**
+	 * Write each `bound` entry's id into its local file and record RoleCall's
+	 * hash for it. Only a path this vault has a file for, in the version
+	 * RoleCall names, is touched or recorded (`stampTargets`) — a GM note
+	 * RoleCall names that is not here (the GM folder off, deleted since)
+	 * stays out of the push state. The stamp runs on the file's CURRENT
+	 * text, so anything typed since the push is kept. Returns how many files
+	 * were stamped.
+	 */
+	private async stampBound(
+		bound: BoundEntry[],
+		collected: Collected,
+		plan: PushPlan,
+		rejected: Set<string>,
+		next: SyncState,
+		stamped: StampedState,
+	): Promise<number> {
+		let tagged = 0;
+		const targets = stampTargets(bound, collected.sources, rejected, plan.currentHashes);
+
+		for (const { entry, localPath } of targets) {
+			const file = this.app.vault.getFileByPath(localPath);
+			if (!file) continue;
+
+			try {
+				const current = await this.app.vault.read(file);
+				const preview = stampRcId(current, entry.rc_id, entry.replace);
+				if (preview === null || preview === current) {
+					// Not stampable (a BOM, an unclosed fence) or it already has an
+					// rc_id: no write. RoleCall's binding by note holds regardless.
+					const hash = await hashText(current);
+					recordBound(next, stamped, entry, hash, hash);
+					continue;
+				}
+
+				const seen = { before: current, after: current };
+				await this.app.vault.process(file, (data) => {
+					seen.before = data;
+					seen.after = stampRcId(data, entry.rc_id, entry.replace) ?? data;
+					return seen.after;
+				});
+
+				const before = await hashText(seen.before);
+				const after = await hashText(seen.after);
+				if (recordBound(next, stamped, entry, before, after)) tagged += 1;
+			} catch (err) {
+				console.error(`RoleCall Sync: couldn't write the RoleCall id into ${file.path}`, err);
+				recordBound(next, stamped, entry);
+			}
+		}
+
+		return tagged;
+	}
+
+	/**
+	 * Replace each `normalised` note's local copy with what RoleCall stored —
+	 * only while it is still exactly the file this push sent. A copy edited
+	 * since keeps the pushed hash, so the next pull offers RoleCall's version
+	 * and the next push of the edit parks on RoleCall rather than putting the
+	 * GM properties back on a player page.
+	 */
+	private async applyNormalised(
+		normalised: NormalisedEntry[],
+		collected: Collected,
+		plan: PushPlan,
+		rejected: Set<string>,
+		next: SyncState,
+	): Promise<void> {
+		for (const { entry, localPath } of localTargets(normalised, collected.sources, rejected)) {
+			const file = this.app.vault.getFileByPath(localPath);
+			if (!file) continue;
+
+			try {
+				const current = await this.app.vault.read(file);
+				const replace = shouldReplaceNormalised(
+					entry,
+					plan.currentHashes[entry.path],
+					await hashText(current),
+					await hashText(entry.markdown),
+				);
+				if (!replace) {
+					console.debug(
+						`RoleCall Sync: left ${file.path} as it is — it changed since the push; pull to get RoleCall's player page`,
+					);
+					continue;
+				}
+
+				const done = { replaced: false };
+				await this.app.vault.process(file, (data) => {
+					if (data !== current) return data;
+					done.replaced = true;
+					return entry.markdown;
+				});
+				if (done.replaced) next[entry.path] = entry.content_hash;
+			} catch (err) {
+				console.error(`RoleCall Sync: couldn't update ${file.path}`, err);
+			}
+		}
+	}
+}
+
+/** The entity keys, path by path, for the console. */
+function logEntityResults(entity: EntityResults): void {
+	if (entity.bound.length > 0) {
+		console.debug(
+			"RoleCall Sync: notes RoleCall bound to an NPC, place, group or quest",
+			entity.bound.map((b) => b.path),
+		);
+	}
+	if (entity.notesKept.length > 0 || entity.attachmentsKept.length > 0) {
+		console.warn(
+			"RoleCall Sync: deletes RoleCall refused — these belong to an NPC, place, group or quest; remove it in RoleCall to delete them",
+			[...entity.notesKept, ...entity.attachmentsKept],
+		);
+	}
+	if (entity.duplicateIds.length > 0) {
+		console.warn(
+			"RoleCall Sync: notes carrying an rc_id another note already uses — kept as plain notes (delete the copy, or its rc_id line)",
+			entity.duplicateIds,
+		);
+	}
+	if (entity.normalised.length > 0) {
+		console.debug(
+			"RoleCall Sync: player pages published without their GM properties",
+			entity.normalised.map((n) => n.path),
+		);
 	}
 }

@@ -95,7 +95,36 @@ export interface SyncResponse {
 		notes?: SyncResultCounts;
 		attachments?: SyncResultCounts;
 		rejected?: RejectedPath[];
+		// RoleCall entities (plugin 0.5.0; additive, `sync_version` stays 4).
+		// Present only for a batch that declared `gm`, from a token holding
+		// `notes:read`. Read through `readEntityResults` (`entities.ts`),
+		// which drops anything malformed.
+		bound?: BoundResult[];
+		entity_notes_kept?: string[];
+		entity_attachments_kept?: string[];
+		duplicate_ids?: string[];
+		normalised?: NormalisedResult[];
 	};
+}
+
+// A GM note RoleCall bound to an NPC, group, quest or place whose file does
+// not carry its id yet.
+export interface BoundResult {
+	path: string;
+	rc_id: string;
+	// The version the vault last agreed on (what it pushed) — never the
+	// stamped file's hash.
+	content_hash: string;
+	// The head has an `rc_id:` key already (another id, or emptied): overwrite
+	// its value. Otherwise an existing key is never touched.
+	replace?: boolean;
+}
+
+// A GM note dragged into the published folder, as RoleCall stored it.
+export interface NormalisedResult {
+	path: string;
+	markdown: string;
+	content_hash: string;
 }
 
 // The 409 body. `sync_version` is the newest shape the server speaks and

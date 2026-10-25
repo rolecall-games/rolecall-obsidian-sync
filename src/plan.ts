@@ -236,10 +236,39 @@ export function planPush(
  *   pushed. They cannot go in `synced`: with the switch off, a push treats
  *   every GM path there as one to remove from RoleCall. Kept apart, they are
  *   only ever a "which version did I last see" record.
+ * - `stamped` — files the plugin wrote an entity's `rc_id` into after a push
+ *   (`entities.ts`), until the next push sends them.
  */
 export interface PullState {
 	synced: SyncState;
 	pulled: SyncState;
+	stamped?: StampedState;
+}
+
+/**
+ * A local file that differs from the agreed version ONLY by the stamp:
+ * `from` is the agreed hash, `to` the hash of the file once stamped. Kept
+ * until the next successful push of that path.
+ */
+export interface StampRecord {
+	from: string;
+	to: string;
+}
+
+export type StampedState = Record<string, StampRecord>;
+
+/**
+ * The hash a pull should judge a local file by: the agreed version's when the
+ * file is exactly that version plus the stamp. So an edit RoleCall made
+ * between the stamp and the next push is an `update` (the app's file carries
+ * the id too), never a conflict.
+ */
+export function effectiveLocalHash(
+	localHash: string | undefined,
+	record: StampRecord | undefined,
+): string | undefined {
+	if (localHash !== undefined && record !== undefined && record.to === localHash) return record.from;
+	return localHash;
 }
 
 /** The version of `path` this vault last agreed with RoleCall on, if any. */
@@ -339,7 +368,7 @@ export function planPull(
 	for (const entry of remote) {
 		const action = classifyPull(
 			entry.content_hash,
-			local[entry.path],
+			effectiveLocalHash(local[entry.path], state.stamped?.[entry.path]),
 			baseHash(state, entry.path),
 			entry.conflict === true,
 		);

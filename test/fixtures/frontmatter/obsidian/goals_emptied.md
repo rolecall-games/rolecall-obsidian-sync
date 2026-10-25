@@ -1,0 +1,4 @@
+---
+goals:
+race: Elf
+---

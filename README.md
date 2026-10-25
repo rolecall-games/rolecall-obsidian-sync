@@ -129,6 +129,41 @@ If the GM folder is switched on but can't be found (renamed, or a typo in the se
 carries your published notes only and leaves the GM notes already on RoleCall untouched — a folder
 the plugin can't find is never treated as "delete them all".
 
+## NPCs, places, groups and quests (0.5.0, unreleased)
+
+RoleCall keeps your campaign's NPCs, groups, quests and places as GM notes under `GM/NPCs`,
+`GM/Groups`, `GM/Quests` and `GM/Locations`. When a push carries a new note there (with the GM
+folder on), RoleCall makes it an NPC, group, quest or place and tells the plugin which one. The
+plugin then writes one line into that note's properties:
+
+```yaml
+rc_id: npc_01j9xk3f2m8qzr7w4e6t1yabcd
+```
+
+That `rc_id` is how RoleCall recognises the note across renames — rename it and edit it in one go
+and it is still the same NPC. **Leave it in.** Nothing else in the file is touched: the line goes
+right after the opening `---` (or a small `---` block is added on top of a note with no properties),
+and your next push sends it without asking anything of you. A note that already has an `rc_id` is
+never changed, unless RoleCall says its value is wrong or was emptied. A note saved with a
+byte-order mark, or with an unclosed `---`, is left alone; RoleCall still knows which NPC it is.
+
+After a push, the notice may also say:
+
+- **`RoleCall kept N entity notes you deleted`** — a note that belongs to an NPC, place, group or
+  quest isn't deleted by deleting the file (nor by turning the GM folder off), and your next pull
+  brings it back. Remove the NPC (place, group, quest) in RoleCall first; after that its note
+  deletes like any other. GM pictures those notes show are kept with them.
+- **`N notes carry an id another note already uses`** — a copy of an entity's note (Obsidian's
+  "Make a copy"). It is kept on RoleCall as a plain note; delete the copy, or its `rc_id` line.
+- **`N player pages published without your GM properties`** — you dragged an entity's GM note into
+  your published folder. RoleCall shows that NPC to your players with a page that carries only
+  `type` and `rc_id`, and the plugin replaces your local copy with that page (unless you edited it
+  since the push — then your next pull offers RoleCall's version). The GM note itself stays in
+  RoleCall.
+
+The full lists are in the developer console. None of this sends anything new about your vault to
+RoleCall: the plugin only acts on what RoleCall named, and only for files it pushed.
+
 ## Pull
 
 Open the command palette and run **RoleCall Sync: Pull notes from RoleCall**.
@@ -179,13 +214,44 @@ ln -s "$PWD" "/path/to/TestVault/.obsidian/plugins/rolecall-sync"
 
 Install the [Hot Reload](https://github.com/pjeby/hot-reload) plugin in the test vault so changes to `main.js` reload automatically.
 
+The `rc_id` stamp (`src/stamp.ts`) must write exactly the bytes the RoleCall server expects, so its
+tests compare it with the server's own port on a shared corpus:
+`test/fixtures/frontmatter/stamp-golden.json`, generated from the server's code by
+`test/fixtures/frontmatter/gen-stamp-golden.exs` (usage in its header). Regenerate it, and recopy the
+server's `test/fixtures/frontmatter/obsidian/*.md`, whenever the server's frontmatter rules change.
+
 Production build, tests and lint:
 
 ```bash
 npm run build
-npm test       # the push-planning rules in src/plan.ts — no Obsidian runtime needed
+npm test       # src/plan.ts, src/entities.ts and src/stamp.ts — no Obsidian runtime needed
 npm run lint
 ```
+
+## Unreleased — 0.5.0
+
+What changes for a GM (details in [NPCs, places, groups and quests](#npcs-places-groups-and-quests-050-unreleased)):
+
+- **NPC, group, quest and place notes get their RoleCall id.** After a push with the GM folder on,
+  each note RoleCall made into an NPC, group, quest or place gains one `rc_id: …` line in its
+  properties; nothing else in the file changes. The next push sends that line once, and a pull in
+  between never asks you about it. A note RoleCall holds in a newer version than yours (pushed from
+  another device) is not touched until a pull has brought that version down.
+- **A note dragged from the GM folder into the published folder** is replaced locally by the player
+  page RoleCall published (its GM properties dropped) — only while it is still exactly what you
+  pushed.
+- **The push notice says more**: notes tagged with their id, entity notes (and their pictures)
+  RoleCall kept although you deleted them, copies carrying an id another note already uses, and
+  player pages published without your GM properties. Paths are in the developer console.
+- Nothing new is sent to RoleCall: the request is unchanged, `SYNC_VERSION` stays 4, and against a
+  server without entity sync the plugin behaves exactly like 0.4.x.
+
+**Rollout order: deploy the RoleCall server first, then tag the plugin.** The server's response keys
+(`bound`, `entity_notes_kept`, `entity_attachments_kept`, `duplicate_ids`, `normalised`) are what
+this release acts on; the plugin tag only adds behaviour once they exist. `rc_id` stamping must
+match the server's `unstamp_candidates` byte for byte, so regenerate
+`test/fixtures/frontmatter/stamp-golden.json` against the server build being deployed before
+tagging (see Local development).
 
 ## Releasing
 
